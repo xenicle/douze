@@ -59,9 +59,16 @@ Verified against firmware `bcdDevice` 1.44, SSL 360 V2.
 | CMake, Ninja, a C++20 compiler | Douze FX only | JUCE 9 is fetched by CMake |
 | PipeWire's `libjack.so.0` | Douze FX only | from `pipewire-jack`; see troubleshooting |
 
-**Nix is not required.** The project was developed on NixOS and ships a flake
-(`nix develop` gives you everything, including capture tooling), but nothing
-depends on it — `sslctl` and the GUI need only Python and pyusb:
+**Nix is not required**, but if you have it, everything below is one command:
+
+```bash
+nix develop          # Python + pyusb, cmake/ninja/gcc and the JUCE deps for
+                     # Douze FX, plus tshark/wireshark/lsusb for captures
+nix run .#douze-app  # the desktop app, without installing anything
+```
+
+The project was developed on NixOS and ships a flake, but nothing depends on it
+— `sslctl` and the GUI need only Python and pyusb:
 
 ```bash
 # Debian/Ubuntu
@@ -154,9 +161,12 @@ sed "s|%h/douze|$PWD|" systemd/douze.service > ~/.config/systemd/user/douze.serv
 systemctl --user daemon-reload && systemctl --user enable --now douze
 ```
 
-(On Nix, point `ExecStart` at `nix develop … --command python tools/douze.py`
-instead, so the daemon gets the devShell's dependencies — see the comments in
-the unit file.)
+On Nix, run the daemon *through* the devShell so it gets pyusb, by replacing the
+`ExecStart` line with (adjust the path):
+
+```ini
+ExecStart=/run/current-system/sw/bin/nix develop %h/douze --command python tools/douze.py
+```
 
 Open <http://localhost:1212>. If the card is absent at login the unit retries
 every 10 s.

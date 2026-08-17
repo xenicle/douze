@@ -279,11 +279,28 @@ class SSL12:
         self.dev = usb.core.find(idVendor=VID, idProduct=PID)
         if self.dev is None:
             sys.exit("SSL Control I/F (31e9:0024) introuvable — SSL 12 branchée ?")
+        # ⚠️ NE PAS appeler `set_configuration()` sans vérifier d'abord.
+        #
+        # C'est une requête au niveau du PÉRIPHÉRIQUE : elle réussit même quand
+        # quelqu'un d'autre tient l'interface, et elle RÉINITIALISE le device. La
+        # SSL 12 ayant un hub interne, la ré-énumération emporte aussi l'interface
+        # AUDIO — les bandes perdent leur device JACK et s'arrêtent.
+        #
+        # Vécu le 17/08/2026 : un `sslctl status` lancé pendant que le démon
+        # tournait a coupé le micro en pleine conversation, CINQ fois en 24 s. Et
+        # le message affiché était « Accès refusé », donc on croyait qu'il ne
+        # s'était rien passé. Un outil qui casse en annonçant qu'il n'a rien fait
+        # est pire qu'un outil qui casse.
         try:
-            self.dev.set_configuration()
+            self.dev.get_active_configuration()
+        except usb.core.USBError:
+            self.dev.set_configuration()      # device pas encore configuré
+        try:
             usb.util.claim_interface(self.dev, 0)
         except usb.core.USBError as e:
-            sys.exit(f"Accès refusé ({e}) — règle udev/99-douze.rules ou sudo.")
+            sys.exit(f"Interface occupée ou refusée ({e}).\n"
+                     "  • le démon Douze la tient ? `systemctl --user stop douze`\n"
+                     "  • sinon : règle udev/99-douze.rules, ou lancer avec sudo.")
 
     def write(self, data):
         self.dev.write(EP_OUT, data, timeout=1000)

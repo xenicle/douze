@@ -24,7 +24,10 @@ Description=Douze - GUI SSL 12
 # lire le journal ne se diagnostique pas.
 Environment=PYTHONUNBUFFERED=1
 WorkingDirectory=%h/douze
-ExecStart=python3 tools/douze.py
+# Chemin ABSOLU obligatoire : systemd refuse `python3` tout court
+# (« Command python3 is not executable »). `/usr/bin/env` est le
+# chemin absolu portable qui retrouve le bon python.
+ExecStart=/usr/bin/env python3 tools/douze.py
 Restart=on-failure
 RestartSec=10
 

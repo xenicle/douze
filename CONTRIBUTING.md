@@ -31,7 +31,8 @@ fx/tools/run_tests.sh          # engine — no audio device
 python fx/tools/nulltest.py    # audio path is bit-transparent (daemon must run)
 ```
 
-The first two need nothing but a checkout. Please run them before submitting.
+The first one needs nothing but a checkout; the second needs Douze FX built.
+Please run them before submitting.
 
 If you touch anything in the audio path, run the null test too, and say so in
 the pull request.

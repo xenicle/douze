@@ -116,8 +116,11 @@ Make sure you are in the `audio` group (`id -nG`), then **replug the card**.
 python tools/sslctl.py info
 ```
 
-It should print the control interface and its two endpoints. If it says
-permission denied, see [troubleshooting](#troubleshooting).
+It should print the bus, address and firmware version of the control
+interface. If it says permission denied, see [troubleshooting](#troubleshooting).
+
+> Run it **before** starting the daemon, or stop the daemon first: it owns the
+> device, and the CLI can't share it.
 
 ### 2. Split the playback pairs (PipeWire)
 
@@ -414,7 +417,7 @@ to Nix's dependency scan. Run `tools/gcroots.sh` after each rebuild.
 
 ```bash
 python tools/test_douzefx.py   # supervisor, scanner, profiles — no hardware needed
-fx/tools/run_tests.sh          # engine checks, no audio device needed
+fx/tools/run_tests.sh          # engine checks — build Douze FX first (see above)
 python fx/tools/nulltest.py    # audio path is bit-transparent (daemon must run)
 ```
 

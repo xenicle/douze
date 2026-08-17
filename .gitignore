@@ -1,0 +1,10 @@
+result
+.direnv/
+__pycache__/
+.gcroots/
+result
+result-*
+build-fx/
+
+# Mémoire de travail locale (contexte personnel) — pas publiée.
+CLAUDE.md

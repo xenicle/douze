@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- Douze — actif. Trois tranches de mixette : ça reste lisible à 22 px, là où
+       un texte ou un contour se transforment en bouillie. -->
+  <g fill="none" stroke="#8a8a92" stroke-width="3" stroke-linecap="round">
+    <path d="M12 8 V40"/>
+    <path d="M24 8 V40"/>
+    <path d="M36 8 V40"/>
+  </g>
+  <g fill="#e8503a">
+    <rect x="7"  y="26" width="10" height="6" rx="3"/>
+    <rect x="19" y="14" width="10" height="6" rx="3"/>
+    <rect x="31" y="21" width="10" height="6" rx="3"/>
+  </g>
+</svg>

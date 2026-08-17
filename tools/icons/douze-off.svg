@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- Douze — démon injoignable. Même dessin que `douze.svg`, éteint : la forme
+       ne change pas (on la reconnaît), seule la couleur dit que rien ne répond. -->
+  <g fill="none" stroke="#5a5a60" stroke-width="3" stroke-linecap="round">
+    <path d="M12 8 V40"/>
+    <path d="M24 8 V40"/>
+    <path d="M36 8 V40"/>
+  </g>
+  <g fill="#5a5a60">
+    <rect x="7"  y="26" width="10" height="6" rx="3"/>
+    <rect x="19" y="14" width="10" height="6" rx="3"/>
+    <rect x="31" y="21" width="10" height="6" rx="3"/>
+  </g>
+</svg>

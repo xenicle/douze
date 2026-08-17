@@ -1,0 +1,7 @@
+# SSL 12 — interface de contrôle (SSL Control I/F) accessible sans root.
+#
+# ⚠️ Ne pas utiliser TAG+="uaccess" dans un fichier 99-* : le tag est traité
+# par 73-seat-late.rules, donc toute règle uaccess numérotée après 73 est
+# ignorée (piège vécu le 17/08/2026 — `services.udev.extraRules` de NixOS
+# génère justement un 99-local.rules). MODE/GROUP fonctionne partout.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="31e9", ATTRS{idProduct}=="0024", MODE="0660", GROUP="audio"

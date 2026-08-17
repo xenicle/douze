@@ -1,0 +1,15 @@
+# Archive de secours — capture 11-mute(cut)-solo (le .ctl.pcapng a été
+# supprimé par erreur ; ceci est la sortie complète de ssldecode --no-noise).
+# Adresse device 14. 808 messages, 808 checksums OK.
+# Geste : Analogue 1 — SOLO on t≈3.7 / off t≈9.4, CUT on t≈11.1 / off t≈16.7.
+# Sémantique (cf. PROTOCOL.md) : solo/cut = émulation host par écriture de
+# gains ; 0 = -inf. Extraits clés :
+#   SOLO ON  (3.72) : canal 1 conservé (inst 8/0x26 = 016bd802), tout le
+#                     reste écrit à 0 sur toutes les couches (stride 30 :
+#                     0x44 0x62 0x80 0x9e 0xbc 0xda…)
+#   SOLO OFF (9.42) : restauration de toutes les valeurs (85 8d 02 02,
+#                     02 d8 6b 01, e6 09 6a 01…)
+#   CUT ON  (11.11) : inst 8 et 0x26 → 0
+#   CUT OFF (16.70) : inst 8 et 0x26 → 02 d8 6b 01
+# La chronologie exhaustive est reproduite dans la conversation d'analyse du
+# 16/08/2026 ; à refaire en pcap si besoin d'exhaustivité binaire.

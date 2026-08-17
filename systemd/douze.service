@@ -1,0 +1,32 @@
+# Douze — GUI web locale pour la SSL 12 (http://localhost:1212)
+#
+# Service utilisateur. À ADAPTER avant usage : `WorkingDirectory` doit pointer là
+# où vous avez cloné le dépôt.
+#
+#   sed "s|%h/douze|$PWD|" systemd/douze.service > ~/.config/systemd/user/douze.service
+#   systemctl --user daemon-reload && systemctl --user enable --now douze
+#
+# Le seul prérequis est python3 + pyusb.
+#
+# Sous Nix, pour prendre les dépendances du devShell plutôt que celles du
+# système, remplacer ExecStart par :
+#   ExecStart=/run/current-system/sw/bin/nix develop %h/douze --command python tools/douze.py
+[Unit]
+Description=Douze - GUI SSL 12
+# pas de After=réseau : tout est local ; le device peut arriver plus tard,
+# d'où le Restart en boucle tant que la SSL 12 n'est pas là.
+
+[Service]
+# Sans ça, la sortie de Python est bufferisée par BLOCS dès qu'elle ne va pas
+# vers un terminal : les messages du démon (état restauré, bandes relancées,
+# applications rebranchées) n'arrivaient dans `journalctl` qu'au bout de
+# plusieurs kilo-octets, donc en pratique jamais. Un service dont on ne peut pas
+# lire le journal ne se diagnostique pas.
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=%h/douze
+ExecStart=python3 tools/douze.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,1713 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Douze</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#211F1C">
+<style>
+  :root {
+    --ground: #211F1C; --panel: #2B2926; --panel-2: #262421; --line: #3A3733;
+    --ink: #EAE6DD; --ink-soft: #9A948A; --accent: #6D93E8; --accent-ink: #10131C;
+    --meter: #4FBF77; --meter-hi: #E2A93B; --meter-peak: #E06060; --meter-dim: #2E4437;
+    --alert: #E06060; --amber: #E2A93B; --cap-shadow: rgba(0,0,0,.5);
+    --chip-on: #23304C; --focus: #6D93E8;
+    /* Teinte de zébrage (matrice de routing) : assez pour guider l'œil, pas
+       assez pour concurrencer un point de croisement actif. */
+    --stripe: rgba(255, 255, 255, .045);
+    /* Plus marquée : posée sur le bleu d'un point actif, une teinte à 4,5 %
+       ne se verrait pas. */
+    --stripe-on: rgba(255, 255, 255, .09);
+  }
+  :root[data-theme="light"] {
+    --ground: #ECEAE4; --panel: #F7F6F2; --panel-2: #EFEDE7; --line: #D8D4CA;
+    --ink: #26231E; --ink-soft: #6E695F; --accent: #2456C7; --accent-ink: #FFF;
+    --meter: #3A9E5F; --meter-hi: #D9930D; --meter-peak: #D64545; --meter-dim: #D6E5DB;
+    --alert: #D64545; --amber: #D9930D; --cap-shadow: rgba(38,35,30,.18);
+    --chip-on: #E4EAF9; --focus: #2456C7;
+    --stripe: rgba(38, 35, 30, .05);
+    --stripe-on: rgba(38, 35, 30, .10);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink);
+    font: 15px/1.45 ui-sans-serif, system-ui, "Cantarell", "DejaVu Sans", sans-serif;
+    padding: 0 0 48px; }
+  .mono { font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+          font-variant-numeric: tabular-nums; }
+  .lbl { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase;
+         color: var(--ink-soft); font-weight: 600; }
+  header { display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 14px 22px; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 5; }
+  .brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; }
+  .brand b { font-size: 21px; font-weight: 800; }
+  .brand span { font-size: 12px; color: var(--ink-soft); }
+  .stat { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-soft); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--meter); }
+  .dot.err { background: var(--alert); }
+  /* Douze déconnectée : tout ce qui dépend du device est estompé ET inerte —
+     des faders qu'on peut encore bouger alors que rien ne part vers la carte
+     donneraient une fausse impression de contrôle. L'en-tête reste NET : c'est
+     là qu'on lit pourquoi. Les bandes d'effets, elles, tournent dans leur propre
+     process et restent donc vivantes. */
+  body.offline main { opacity: .35; filter: grayscale(.65); pointer-events: none; }
+  body.offline main .fxcard { opacity: 1; filter: none; pointer-events: auto; }
+  body.offline header { opacity: 1; }
+  /* Profil rappelé puis modifié : discret, à côté de la liste. */
+  .prof-dirty { color: var(--alert); font-size: 16px; line-height: 1; cursor: help; }
+  /* `appearance: none` est OBLIGATOIRE, pas cosmétique : sans lui WebKit dessine
+     le widget natif GTK et IGNORE background/color. Dans la fenêtre de
+     l'application (WebKitGTK), « Studio » et « Aucun » s'affichaient en clair sur
+     clair, illisibles — alors que Firefox, lui, respectait la CSS. Le chevron
+     natif disparaissant avec, on le redessine. */
+  select { appearance: none; -webkit-appearance: none;
+    background-color: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 4px 26px 4px 8px; font-size: 12.5px;
+    background-image: url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'>\
+<path d='M1 1l4 4 4-4' fill='none' stroke='%239aa0a6' stroke-width='1.6' \
+stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    background-repeat: no-repeat; background-position: right 8px center;
+    background-size: 10px 6px; }
+  /* Le menu déroulant lui-même est dessiné par le système : on force au moins
+     ses couleurs, sinon il hérite du thème clair. */
+  select option { background-color: var(--panel-2); color: var(--ink); }
+  .theme-btn { border: 1px solid var(--line); background: var(--panel-2);
+    color: var(--ink-soft); border-radius: 7px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  main { display: grid; gap: 18px; padding: 20px 22px;
+    grid-template-columns: minmax(520px, 1fr) 300px;
+    align-items: start; max-width: 1560px; margin: 0 auto; }
+  section.mon { grid-column: 2; grid-row: 1 / span 2; }
+  @media (max-width: 1024px) {
+    main { grid-template-columns: 1fr; }
+    section.mon { grid-column: auto; grid-row: auto; }
+  }
+  section.card { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 16px 18px 18px; }
+  section.card > h2 { margin: 0 0 14px; font-size: 12px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--ink-soft); font-weight: 700; }
+  .strips { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px;
+    justify-content: safe center; }
+  .strip { flex: 1 0 84px; max-width: 100px; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 11px; padding: 10px 8px 12px;
+    display: flex; flex-direction: column; align-items: center; gap: 9px; }
+  .strip .name { font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .strip .sub { font-size: 10px; color: var(--ink-soft); margin-top: -7px; white-space: nowrap; }
+  .keys { display: flex; gap: 5px; flex-wrap: wrap; justify-content: center; }
+  .key { border-radius: 6px; padding: 4px 7px; font-size: 9.5px; font-weight: 700;
+    letter-spacing: .06em; cursor: pointer; color: var(--ink);
+    background: var(--panel); box-shadow: 0 1.5px 0 var(--cap-shadow);
+    border: 1px solid var(--line); }
+  .key[aria-pressed="true"] { transform: translateY(1px); box-shadow: 0 .5px 0 var(--cap-shadow); }
+  .key.red[aria-pressed="true"]   { background: var(--alert); color: #fff; border-color: transparent; }
+  .key.green[aria-pressed="true"] { background: var(--meter); color: #fff; border-color: transparent; }
+  .key.amber[aria-pressed="true"] { background: var(--amber); color: #1E1A10; border-color: transparent; }
+  .key.blue[aria-pressed="true"]  { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  .fader { display: flex; gap: 8px; align-items: stretch; height: 148px; }
+  .meterbar { width: 7px; border-radius: 4px; background: var(--meter-dim);
+    position: relative; overflow: hidden; }
+  .pk { position: absolute; left: 0; right: 0; height: 2px; bottom: 0;
+    background: var(--ink-soft); opacity: .9; }
+  .pk.clip { background: var(--meter-peak); height: 3px; }
+  .meterbar i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--meter);
+    border-radius: 4px; height: 0; }
+  /* Fader vertical, DEUX écritures nécessaires :
+       - `writing-mode` est le standard (Firefox 129+, Chrome 111+) ;
+       - `-webkit-appearance: slider-vertical` est la seule que comprenne le
+         WebKit de l'application de bureau (WebKitGTK 2.50 / « Safari 605 »), qui
+         sinon dessine le fader À L'HORIZONTALE à côté du vumètre.
+     Vérifié par capture d'écran du moteur : avec les deux, l'axe est vertical, le
+     minimum en bas, et le remplissage `accent-color` suit. Chaque moteur ignore
+     la propriété qu'il ne connaît pas. */
+  input[type="range"].v { writing-mode: vertical-lr; direction: rtl;
+    -webkit-appearance: slider-vertical; width: 26px;
+    height: 100%; accent-color: var(--accent); background: transparent; }
+  .db { font-size: 11.5px; color: var(--ink-soft); }
+  .pan { width: 60px; accent-color: var(--accent); }
+  .strip.bypassed .fader, .strip.bypassed .pan, .strip.bypassed output,
+  .strip.bypassed .keys:last-child { opacity: .35; pointer-events: none; }
+  .matrix { border-collapse: separate; border-spacing: 4px; width: 100%; }
+  .matrix th { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-soft); font-weight: 600; padding: 2px 4px; }
+  /* Nom de la source : c'est la clé de lecture d'une ligne, il doit ressortir
+     autant que le contenu, pas être un gris discret. */
+  .matrix th[scope="row"] { text-align: left; white-space: nowrap;
+    color: var(--ink); font-size: 11.5px; letter-spacing: .04em; text-transform: none;
+    font-weight: 700; }
+  .matrix td { text-align: center; }
+
+  /* Lisibilité : UNE LIGNE et UNE COLONNE sur deux légèrement teintées.
+     Le fond de ligne est une COULEUR, la teinte de colonne un DÉGRADÉ
+     semi-transparent posé par-dessus — ainsi les deux se cumulent à
+     l'intersection, là où deux `background-color` se seraient écrasés. */
+  .matrix tbody tr:nth-child(even) th,
+  .matrix tbody tr:nth-child(even) td { background-color: var(--stripe); }
+  .matrix tbody td:nth-child(even),
+  .matrix thead th:nth-child(even) {
+    background-image: linear-gradient(var(--stripe), var(--stripe)); }
+  .matrix tbody th, .matrix tbody td { border-radius: 9px; }
+  .matrix thead th:nth-child(even) { border-radius: 9px 9px 0 0; }
+
+  .xp { width: 100%; min-width: 56px; border-radius: 8px; border: 1px dashed var(--line);
+    background: transparent; color: var(--ink); font-size: 12px; padding: 8px 4px;
+    cursor: ns-resize; font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums; touch-action: none; user-select: none; }
+  .xp.on { border: 1px solid transparent; background: var(--chip-on); color: var(--accent); font-weight: 700; }
+  /* Un point ACTIF suit le zébrage lui aussi, mais SUR LES LIGNES SEULEMENT.
+     Le fond bleu venant d'un `background-color`, la teinte se pose en couche
+     d'image par-dessus.
+     Première version : ligne ET colonne, les couches se cumulant. Ça produisait
+     TROIS niveaux de bleu (0, 1 ou 2 couches) et une case unique en ligne
+     impaire × colonne impaire — la seule sans aucune teinte de toute la table,
+     donc visiblement dépareillée. Les cases actives se distinguent déjà par leur
+     couleur : le rythme des lignes leur suffit, et il ne laisse que deux
+     niveaux. */
+  .matrix tbody tr:nth-child(even) .xp.on {
+    background-image: linear-gradient(var(--stripe-on), var(--stripe-on)); }
+  .hint { font-size: 12px; color: var(--ink-soft); margin: 10px 2px 0; }
+  .mon { display: flex; flex-direction: column; gap: 14px; }
+  .big-vol { text-align: center; padding: 2px 0; }
+  .big-vol output { font-size: 42px; font-weight: 800; display: block; }
+  .big-vol output small { font-size: 15px; color: var(--ink-soft); font-weight: 600; }
+  .big-vol input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .monkeys { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .monkey { display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 13px 6px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel-2); font-weight: 800; font-size: 13px; letter-spacing: .08em;
+    cursor: pointer; color: var(--ink); box-shadow: 0 2px 0 var(--cap-shadow); }
+  .monkey .led { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+  .monkey[aria-pressed="true"] { transform: translateY(1px); box-shadow: 0 1px 0 var(--cap-shadow); }
+  .monkey[aria-pressed="true"] .led { background: currentColor; }
+  .monkey.red[aria-pressed="true"]   { background: var(--alert); color: #fff; border-color: transparent; }
+  .monkey.amber[aria-pressed="true"] { background: var(--amber); color: #1E1A10; border-color: transparent; }
+  .monkey.blue[aria-pressed="true"]  { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  .hw-note { font-size: 11.5px; color: var(--ink-soft); border-top: 1px solid var(--line);
+    padding-top: 10px; }
+  .busmeters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .busmeter { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .busmeter .pair { display: flex; gap: 4px; height: 120px; align-items: stretch; }
+  .vmeter { width: 9px; border-radius: 5px; background: var(--meter-dim);
+    position: relative; overflow: hidden; }
+  .vmeter i { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 5px; height: 0;
+    background: linear-gradient(to top, var(--meter) 0 72%, var(--meter-hi) 72% 90%, var(--meter-peak) 90% 100%);
+    background-size: 100% 120px; background-position: bottom; }
+  .busmeter .bname { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-soft); font-weight: 700; }
+  button:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 2px solid var(--focus); outline-offset: 2px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .key, .monkey, .xp { transition: background .12s, transform .08s, box-shadow .08s; }
+  }
+  /* ----- bandes d'effets (Douze FX) ---------------------------------------- */
+  .fxgraph { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    border: 1px solid var(--line); border-radius: 11px; background: var(--panel-2);
+    padding: 9px 12px; margin-bottom: 12px; font-size: 12.5px; }
+  .fxgraph .lbl { margin-right: -4px; }
+  .fxgraph .note { color: var(--ink-soft); font-size: 11.5px; flex-basis: 100%; }
+  .fxband { border: 1px solid var(--line); border-radius: 11px; background: var(--panel-2);
+    padding: 11px 13px 12px; display: grid; gap: 10px; margin-bottom: 10px; }
+  .fxband.off { opacity: .62; }
+  .fxtop { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .fxtop h3 { margin: 0; font-size: 15px; font-weight: 800; }
+  .fxtop .acts { margin-left: auto; display: flex; gap: 6px; }
+  .pill { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700;
+    padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink-soft); }
+  .pill.live { background: var(--meter-dim); color: var(--meter); border-color: transparent; }
+  /* Renoncement du superviseur (trop de relances) : à lire, pas juste à voir. */
+  .pill.err { background: #3a1b1b; color: #ff9b9b; border-color: transparent;
+              text-transform: none; letter-spacing: 0; font-weight: 600; }
+  /* Bande FIGÉE : ambre et pas rouge, parce que le son passe toujours. Le rouge
+     dirait « panne » et pousserait à relancer dans l'urgence — justement ce
+     qu'on cherche à éviter. */
+  .pill.amber { background: #3a2f16; color: #f0c674; border-color: transparent; }
+  .fxflow { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; }
+  @media (max-width: 760px) { .fxflow { grid-template-columns: 1fr; } }
+  .fxnode { background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+    padding: 7px 10px; min-width: 130px; }
+  .fxnode .v { font-size: 13px; font-weight: 700; }
+  .fxnode .s { font-size: 10.5px; color: var(--ink-soft); }
+  /* Vumètre horizontal : dit d'un coup d'œil OÙ un signal disparaît — à
+     l'entrée de la bande, dans la chaîne, ou après. */
+  .fxmeter { height: 5px; border-radius: 3px; background: var(--meter-dim);
+    margin-top: 6px; overflow: hidden; }
+  .fxmeter i { display: block; height: 100%; width: 0; background: var(--meter);
+    border-radius: 3px; }
+  .fxmeter i.hi { background: var(--meter-hi); }
+  .fxmeter i.clip { background: var(--meter-peak); }
+  .fxchain { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 7px;
+    border: 1px dashed var(--line); border-radius: 9px; min-height: 50px; }
+  .fxchip { position: relative; display: flex; align-items: center; gap: 6px;
+    background: var(--chip-on);
+    border: 1px solid transparent; border-radius: 8px; padding: 5px 7px 7px 9px;
+    font-size: 12.5px; font-weight: 700; color: var(--accent); }
+  /* Vumètre d'étage : une ligne fine sous le chip. Les niveaux d'entrée et de
+     sortie de la bande disent « ça rentre » et « ça sort », jamais LEQUEL des
+     plugins perd ou sature le signal. Assez discret pour ne pas concurrencer le
+     nom, assez visible pour repérer un étage muet. */
+  .fxchipvu { position: absolute; left: 9px; right: 9px; bottom: 2px; height: 2px;
+    border-radius: 1px; background: var(--meter-dim); overflow: hidden; }
+  .fxchipvu b { display: block; height: 100%; width: 0; background: var(--meter);
+    transition: width .1s linear; }
+  .fxchipvu b.hi { background: var(--meter-hi); }
+  .fxchipvu b.clip { background: var(--meter-peak); }
+  .fxchip.err { background: transparent; border-color: var(--alert); color: var(--alert); }
+  /* Étage bypassé : le chip s'éteint, comme le plugin. */
+  .fxchip.byp { background: transparent; border-color: var(--line); color: var(--ink-soft); }
+  .fxchip button[aria-pressed="true"] { opacity: 1; color: var(--amber); }
+  .fxchip .why { font-weight: 500; font-size: 10.5px; color: var(--ink-soft); }
+  .fxchip button { border: none; background: transparent; color: inherit; cursor: pointer;
+    font: inherit; font-size: 12px; opacity: .75; padding: 0 2px; line-height: 1; }
+  .fxchip button:hover { opacity: 1; }
+  /* Éditeur natif connu pour figer la bande : visible mais inerte, l'infobulle
+     dit quoi faire à la place. */
+  .fxchip button:disabled { opacity: .3; cursor: not-allowed; text-decoration: line-through; }
+  .fxchip button:disabled:hover { opacity: .3; }
+  .fxchip.add { background: transparent; border: 1px dashed var(--line); color: var(--ink-soft);
+    cursor: pointer; }
+  .fxchip.add:hover { color: var(--accent); border-color: var(--accent); }
+  .fxfoot { display: flex; gap: 15px; align-items: center; flex-wrap: wrap;
+    border-top: 1px solid var(--line); padding-top: 8px; font-size: 11.5px; color: var(--ink-soft); }
+  /* Le bloc affiché est celui réellement accordé par PipeWire ; la demande
+     n'apparaît que si elle diffère, pour ne pas laisser croire à un réglage
+     qui n'a pas pris. */
+  .asked { font-size: 10px; font-weight: 700; color: var(--amber); border: 1px solid var(--amber);
+    border-radius: 999px; padding: 1px 6px; }
+  dialog { border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 13px; padding: 0; width: min(640px, 92vw); }
+  dialog::backdrop { background: rgba(12,11,10,.66); }
+  .dlghead { display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-bottom: 1px solid var(--line); }
+  .dlghead h2 { margin: 0; font-size: 12px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-soft); font-weight: 700; margin-right: auto; }
+  .dlgbody { padding: 12px 16px 16px; max-height: 64vh; overflow: auto; }
+  .fxsearch { width: 100%; background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px; padding: 7px 11px; font: inherit;
+    font-size: 13px; margin-bottom: 10px; }
+  .fxrow { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 8px;
+    border: 1px solid transparent; cursor: pointer; }
+  .fxrow:hover { background: var(--panel-2); border-color: var(--line); }
+  .fxrow .nm { font-weight: 700; font-size: 13px; }
+  .fxrow .meta { font-size: 11px; color: var(--ink-soft); margin-left: auto; }
+  /* Le NOM du plugin en cours passe avant tout : c'est la seule information qui
+     dit pourquoi le scan s'attarde, et c'est elle qu'on regarde quand un plugin
+     gèle. La barre passe donc sur sa propre ligne (flex-basis: 100%) au lieu de
+     lui manger la place. */
+  .fxscanbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+    margin: 10px 0 2px; }
+  .fxprog { flex-basis: 100%; height: 6px; border-radius: 3px; background: var(--line);
+    overflow: hidden; }
+  .fxprog i { display: block; height: 100%; width: 0; background: var(--accent);
+    transition: width .2s linear; }
+  .fxprogtxt { flex: 1; min-width: 0; font-size: 12px; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fxprogtxt b { color: var(--accent); font-weight: 700; }
+  .fxprogtxt .soft { color: var(--ink-soft); }
+  .fxsort { display: flex; align-items: center; gap: 6px; margin: 8px 0 10px; }
+  .fxsort .key[aria-pressed="true"] { background: var(--chip-on); border-color: var(--accent); }
+  .fxsort .fxcount { margin-left: auto; font-size: 11px; color: var(--ink-soft); }
+  /* En-tête de groupe (marque ou type) : collant, sinon on perd le repère dès
+     qu'on fait défiler 1600 plugins. */
+  .fxgroup { position: sticky; top: 0; z-index: 1; background: var(--panel);
+    font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-soft); font-weight: 700; padding: 8px 9px 4px; }
+  .prow { display: grid; grid-template-columns: 140px 1fr 64px; gap: 10px; align-items: center;
+    margin-bottom: 7px; }
+  .prow label { font-size: 12.5px; }
+  .prow input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .prow .val { font-size: 11.5px; color: var(--ink-soft); text-align: right; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><b>Douze</b><span>SSL 12</span></div>
+  <div class="stat"><span class="dot" id="conn"></span><span id="connlbl">Connectée</span></div>
+  <div class="stat mono" id="clock">— kHz</div>
+  <div class="stat"><label class="lbl" for="profiles" data-i18n="profile">Profil</label>
+    <select id="profiles"><option value="">—</option></select>
+    <!-- Réglages modifiés depuis le rappel du profil. Marqueur à part (pas dans
+         le label) : le label est réécrit à chaque changement de langue. -->
+    <span id="prof-dirty" class="prof-dirty" hidden>•</span>
+    <button class="theme-btn" id="prof-save" data-i18n="save">Enregistrer</button>
+    <button class="theme-btn" id="prof-del" title="Supprimer">✕</button>
+  </div>
+  <div class="stat"><label class="lbl" for="lb">Loopback</label>
+    <select id="lb">
+      <option value="none">Aucun</option><option value="pb12">Playback 1-2</option>
+      <option value="pb34">Playback 3-4</option><option value="pb56">Playback 5-6</option>
+      <option value="pb78">Playback 7-8</option><option value="monitor">Bus Monitor</option>
+      <option value="line34">Line 3-4</option><option value="hpa">HP A</option>
+      <option value="hpb">HP B</option>
+    </select>
+  </div>
+  <select id="lang" class="theme-btn" aria-label="Langue">
+    <option value="fr">FR</option><option value="en">EN</option>
+  </select>
+  <button class="theme-btn" id="theme">Clair</button>
+</header>
+
+<main>
+  <section class="card"><h2 data-i18n="sources">Sources</h2><div class="strips" id="strips"></div></section>
+
+  <section class="card"><h2 data-i18n="routing">Routing — qui sort où</h2>
+    <table class="matrix">
+      <thead><tr><th></th><th scope="col">Monitor</th><th scope="col">HP A</th>
+        <th scope="col">HP B</th><th scope="col">Line 3-4</th></tr></thead>
+      <tbody id="mx"></tbody>
+    </table>
+    <p class="hint" data-i18n="hint">Glisser ↑↓ : niveau · Clic : on ↔ off. Colonne
+    Monitor = fader de la tranche ; les autres = sends indépendants.</p>
+  </section>
+
+  <section class="card fxcard"><h2 data-i18n="fx">Effets — bandes</h2>
+    <div class="fxgraph" id="fxgraph"></div>
+    <!-- Profils de BANDES, distincts de ceux du mixer (en-tête) : ceux-ci
+         rappellent un jeu de bandes complet, câblage et chaînes. -->
+    <div class="fxgraph" id="fxprof">
+      <span class="lbl" data-i18n="fxprofile">Jeu de bandes</span>
+      <select id="fxprofiles"><option value="">—</option></select>
+      <button type="button" class="key" id="fxprofsave" data-i18n="save">Enregistrer</button>
+      <button type="button" class="key" id="fxprofdel" title="Supprimer">✕</button>
+      <span class="note" data-i18n="fxprofhint">Rappeler un jeu ARRÊTE les bandes
+        en cours et relance celles du profil — quelques secondes de silence.</span>
+    </div>
+    <div id="fxlist"></div>
+  </section>
+
+  <dialog id="fxpicker">
+    <div class="dlghead"><h2 data-i18n="fxpick">Ajouter un plugin</h2>
+      <button type="button" class="key" id="fxscan" data-i18n="fxscannew">Chercher les nouveaux</button>
+      <button type="button" class="key" id="fxscanfull" data-i18n="fxscanall">Tout rescanner</button>
+      <button type="button" class="key" id="fxpickclose" data-i18n="fxclose">Fermer</button></div>
+    <div class="dlgbody">
+      <input class="fxsearch" id="fxq" type="search" data-i18n-ph="fxsearch" placeholder="Chercher…">
+      <!-- Barre de scan : visible seulement pendant une passe. Le bouton
+           « Passer » est l'échappatoire quand un plugin gèle — sans lui il
+           faudrait attendre le délai maximum de 90 s. -->
+      <div class="fxscanbar" id="fxscanbar" hidden>
+        <span class="fxprogtxt mono" id="fxprogtxt"></span>
+        <button type="button" class="key" id="fxscanskip" data-i18n="fxskip">Passer</button>
+        <button type="button" class="key" id="fxscanstop" data-i18n="fxstopscan">Arrêter</button>
+        <div class="fxprog"><i id="fxprogbar"></i></div>
+      </div>
+      <div class="fxsort">
+        <span class="lbl" data-i18n="fxsortby">Trier</span>
+        <button type="button" class="key" id="fxsort-az" data-i18n="fxsortaz">A→Z</button>
+        <button type="button" class="key" id="fxsort-brand" data-i18n="fxsortbrand">Marque</button>
+        <button type="button" class="key" id="fxsort-type" data-i18n="fxsorttype">Type</button>
+        <span class="fxcount mono" id="fxcount"></span>
+      </div>
+      <div id="fxresults"></div>
+    </div>
+  </dialog>
+
+  <dialog id="fxparams">
+    <div class="dlghead"><h2 id="fxparamstitle">Paramètres</h2>
+      <button type="button" class="key" id="fxparamsclose" data-i18n="fxclose">Fermer</button></div>
+    <div class="dlgbody" id="fxparamsbody"></div>
+  </dialog>
+
+  <dialog id="fxnew">
+    <div class="dlghead"><h2 id="fxntitle" data-i18n="fxnewtitle">Nouvelle bande</h2>
+      <button type="button" class="key" id="fxnewclose" data-i18n="fxclose">Fermer</button></div>
+    <div class="dlgbody">
+      <div class="prow"><label for="fxnname" data-i18n="fxnname">Nom</label>
+        <input id="fxnname" class="fxsearch" style="margin:0" type="text" value="Nouvelle bande"><span></span></div>
+      <div class="prow"><label for="fxnsrc" data-i18n="fxnsrc">Source</label>
+        <select id="fxnsrc"></select><span></span></div>
+      <div class="prow"><label for="fxnch" data-i18n="fxnch">Canaux</label>
+        <input id="fxnch" class="fxsearch" style="margin:0" type="text" value="1,2">
+        <span class="val" data-i18n="fxnchhint">1 = mono</span></div>
+      <div class="prow"><label for="fxndest" data-i18n="fxndest">Destination</label>
+        <select id="fxndest"><option value="virtualmic">Micro virtuel</option></select><span></span></div>
+      <div class="prow"><label for="fxnauto" data-i18n="fxnauto">Démarrage auto</label>
+        <input id="fxnauto" type="checkbox" checked>
+        <span class="val" data-i18n="fxnautohint">avec Douze</span></div>
+      <div class="prow"><label for="fxncut" data-i18n="fxncut">Couper le direct</label>
+        <input id="fxncut" class="fxsearch" style="margin:0" type="text" placeholder="1">
+        <span class="val" data-i18n="fxncuthint">canaux mixer</span></div>
+      <p class="hint" id="fxnhint" data-i18n="fxnhint">La source et la destination se posent au
+        lancement de la bande : les changer sur une bande en marche la relance.</p>
+      <button type="button" class="key" id="fxncreate" data-i18n="fxncreate">Créer la bande</button>
+    </div>
+  </dialog>
+
+  <section class="card mon"><h2 data-i18n="monitoring">Monitoring</h2>
+    <div class="busmeters" id="busmeters"></div>
+    <div class="big-vol">
+      <span class="lbl" data-i18n="monvol">Volume monitor</span>
+      <output id="mv" class="mono">…</output>
+      <input id="mvr" type="range" min="-60" max="12" value="-12" step="0.5"
+             aria-label="Volume monitor">
+    </div>
+    <div class="monkeys" id="monkeys"></div>
+    <div class="big-vol">
+      <span class="lbl">DIM LEVEL</span>
+      <input id="dimlevel" type="range" min="-40" max="0" value="-12" step="0.5"
+             aria-label="DIM level">
+      <span class="lbl">ALT SPK TRIM</span>
+      <input id="alttrim" type="range" min="-12" max="12" value="0" step="0.5"
+             aria-label="ALT speaker trim">
+    </div>
+    <div class="big-vol">
+      <span class="lbl" data-i18n="hpalbl">Casque A</span>
+      <input id="hpa" type="range" min="-60" max="12" value="0" step="0.5" aria-label="Casque A">
+      <span class="lbl" data-i18n="hpblbl">Casque B</span>
+      <input id="hpb" type="range" min="-60" max="12" value="0" step="0.5" aria-label="Casque B">
+    </div>
+    <p class="hw-note" data-i18n="hwnote"><b>Synchro façade</b> — les boutons physiques
+    CUT · ALT · TALK remontent ici en direct.</p>
+  </section>
+</main>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- i18n
+const I18N = {
+  fr: {sources: "Sources", routing: "Routing — qui sort où", monitoring: "Monitoring",
+       monvol: "Volume monitor", hpalbl: "Casque A", hpblbl: "Casque B",
+       hint: "Glisser ↑↓ : niveau · Clic : on ↔ off. Colonne Monitor = fader de la tranche ; les autres = sends indépendants.",
+       hwnote: "<b>Synchro façade</b> — les boutons physiques CUT · ALT · TALK remontent ici en direct.",
+       connected: "Connectée", disconnected: "Déconnectée", devlost: "Device déconnecté",
+       theme_light: "Clair", theme_dark: "Sombre",
+       mic: "micro", lineinst: "ligne / inst", loopnone: "Aucun", loopmon: "Bus Monitor",
+       profile: "Profil", save: "Enregistrer", profname: "Nom du profil :",
+       profdel: "Supprimer le profil « %s » ?",
+       profdirty: "Réglages modifiés depuis le rappel de ce profil",
+       fx: "Effets — bandes", fxnone: "Aucune bande configurée.",
+       fxstart: "Démarrer", fxstop: "Arrêter", fxbypass: "Bypass",
+       fxadd: "＋ Ajouter", fxpick: "Ajouter un plugin", fxsearch: "Chercher…",
+       fxclose: "Fermer", fxempty: "Chaîne vide", fxstopped: "Arrêtée",
+       fxstarting: "Démarrage…",
+       fxscannew: "Chercher les nouveaux", fxscanall: "Tout rescanner",
+       fxskip: "Passer", fxstopscan: "Arrêter le scan",
+       fxadded: "ajoutés", fxfailed: "en erreur",
+       fxsortby: "Trier", fxsortaz: "A→Z", fxsortbrand: "Marque", fxsorttype: "Type",
+       fxnobrand: "sans marque", fxnotype: "sans type",
+       fxguihang: "L'UI de ce plugin bloque la bande — utilise Paramètres (≡)",
+       fxasked: "%s demandé", fxparams: "Paramètres", fxretry: "Réessayer",
+       fxnew: "＋ Nouvelle bande", fxnewtitle: "Nouvelle bande", fxnname: "Nom",
+       fxnsrc: "Source", fxnch: "Canaux", fxnchhint: "1 = mono",
+       fxnvsink: "Puits virtuel — y envoyer une application",
+       fxvsinkhint: "puits virtuel",
+       fxndest: "Destination", fxnblock: "Bloc", fxnblockhint: "demandé",
+       fxncut: "Couper le direct", fxncuthint: "canaux mixer",
+       fxnauto: "Démarrage auto", fxnautohint: "avec Douze",
+       fxautostart: "Auto",
+       fxncreate: "Créer la bande", fxdel: "Supprimer",
+       fxfrozen: "Figée — son OK",
+       fxrestart: "Relancer",
+       fxrestartask: "Relancer cette bande ? Le son sera coupé quelques secondes.",
+       fxprofile: "Jeu de bandes",
+       fxprofhint: "Rappeler un jeu ARRÊTE les bandes en cours et relance celles " +
+                   "du profil — quelques secondes de silence.",
+       fxprofname: "Nom du jeu de bandes",
+       fxprofask: "Rappeler « %s » ? Les bandes en cours seront arrêtées.",
+       fxprofdelask: "Supprimer le jeu de bandes « %s » ?",
+       fxedit: "Câblage", fxedittitle: "Câblage de la bande",
+       fxnsaveedit: "Enregistrer le câblage", fxabsent: "absent du graphe",
+       fxedithint: "Bande en marche : enregistrer le câblage la RELANCE " +
+                   "(quelques secondes de silence). Le rack est rechargé depuis " +
+                   "le disque — enregistre la chaîne avant si tu l'as modifiée.",
+       fxsave: "Enregistrer", fxsaved: "Enregistré ✓", fxleft: "Déplacer avant", fxright: "Déplacer après",
+       fxgraph: "Horloge du graphe", fxblocklbl: "Bloc", fxratelbl: "Taux", fxauto: "Laisser PipeWire décider",
+       fxdevnote: "Réglage GLOBAL : toutes les applis audio suivent. La période ALSA de %d suit le bloc (%p actuellement), donc baisser le bloc baisse vraiment la latence — jusqu'à ce que les underruns apparaissent.",
+       fxdelask: "Supprimer la bande « %s » ?",
+       fxnhint: "La source et la destination se posent au lancement de la bande : les changer sur une bande en marche la relance."},
+  en: {sources: "Sources", routing: "Routing — what goes where", monitoring: "Monitoring",
+       monvol: "Monitor level", hpalbl: "Headphones A", hpblbl: "Headphones B",
+       hint: "Drag ↑↓: level · Click: on ↔ off. Monitor column = the channel fader; the others are independent sends.",
+       hwnote: "<b>Front-panel sync</b> — the hardware CUT · ALT · TALK buttons show up here live.",
+       connected: "Connected", disconnected: "Disconnected", devlost: "Device disconnected",
+       theme_light: "Light", theme_dark: "Dark",
+       mic: "mic", lineinst: "line / inst", loopnone: "None", loopmon: "Monitor bus",
+       profile: "Profile", save: "Save", profname: "Profile name:",
+       profdel: "Delete profile “%s”?",
+       profdirty: "Settings changed since this profile was recalled",
+       fx: "Effects — strips", fxnone: "No strip configured.",
+       fxstart: "Start", fxstop: "Stop", fxbypass: "Bypass",
+       fxadd: "＋ Add", fxpick: "Add a plug-in", fxsearch: "Search…",
+       fxclose: "Close", fxempty: "Empty chain", fxstopped: "Stopped",
+       fxstarting: "Starting…",
+       fxscannew: "Find new ones", fxscanall: "Rescan everything",
+       fxskip: "Skip", fxstopscan: "Stop scan",
+       fxadded: "added", fxfailed: "failed",
+       fxsortby: "Sort", fxsortaz: "A→Z", fxsortbrand: "Brand", fxsorttype: "Type",
+       fxnobrand: "no brand", fxnotype: "no type",
+       fxguihang: "This plug-in's UI freezes the strip — use Parameters (≡)",
+       fxasked: "%s requested", fxparams: "Parameters", fxretry: "Retry",
+       fxnew: "＋ New strip", fxnewtitle: "New strip", fxnname: "Name",
+       fxnsrc: "Source", fxnch: "Channels", fxnchhint: "1 = mono",
+       fxnvsink: "Virtual sink — send an app into it",
+       fxvsinkhint: "virtual sink",
+       fxndest: "Destination", fxnblock: "Block", fxnblockhint: "requested",
+       fxncut: "Cut direct", fxncuthint: "mixer channels",
+       fxnauto: "Auto-start", fxnautohint: "with Douze",
+       fxautostart: "Auto",
+       fxncreate: "Create strip", fxdel: "Delete",
+       fxfrozen: "Frozen — audio OK",
+       fxrestart: "Restart",
+       fxrestartask: "Restart this strip? Audio will cut for a few seconds.",
+       fxprofile: "Strip set",
+       fxprofhint: "Recalling a set STOPS the running strips and starts the " +
+                   "profile's — a few seconds of silence.",
+       fxprofname: "Strip set name",
+       fxprofask: "Recall “%s”? The running strips will be stopped.",
+       fxprofdelask: "Delete strip set “%s”?",
+       fxedit: "Wiring", fxedittitle: "Strip wiring",
+       fxnsaveedit: "Save wiring", fxabsent: "not in the graph",
+       fxedithint: "Strip is running: saving the wiring RESTARTS it " +
+                   "(a few seconds of silence). The rack is reloaded from disk — " +
+                   "save the chain first if you changed it.",
+       fxsave: "Save", fxsaved: "Saved ✓", fxleft: "Move earlier", fxright: "Move later",
+       fxgraph: "Graph clock", fxblocklbl: "Block", fxratelbl: "Rate", fxauto: "Let PipeWire decide",
+       fxdevnote: "GLOBAL setting: every audio app follows. The ALSA period of %d tracks the block (%p right now), so lowering the block really lowers latency — until underruns show up.",
+       fxdelask: "Delete strip “%s”?",
+       fxnhint: "Source and destination are set when the strip starts: changing them on a running strip restarts it."},
+};
+let LANG = localStorage.getItem("douze.lang") ||
+           ((navigator.language || "en").startsWith("fr") ? "fr" : "en");
+let connKey = "connected";
+const T = k => I18N[LANG][k] || k;
+
+function applyLang() {
+  document.documentElement.lang = LANG;
+  document.getElementById("lang").value = LANG;
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const k = el.dataset.i18n;
+    if (k === "hint" || k === "hwnote") el.innerHTML = T(k);
+    else el.textContent = T(k);
+  });
+  document.querySelectorAll("[data-subkey]").forEach(el =>
+    el.textContent = T(el.dataset.subkey));
+  const lb = document.getElementById("lb");
+  lb.querySelector('[value="none"]').textContent = T("loopnone");
+  lb.querySelector('[value="monitor"]').textContent = T("loopmon");
+  document.getElementById("connlbl").textContent = T(connKey);
+  const r = document.documentElement;
+  document.getElementById("theme").textContent =
+    r.getAttribute("data-theme") === "light" ? T("theme_dark") : T("theme_light");
+}
+
+// ---------------------------------------------------------------- modèle
+const CHANNELS = [
+  {id: "1",    name: "Analogue 1", subkey: "mic",       slots: [8],    preamp: true},
+  {id: "2",    name: "Analogue 2", subkey: "mic",       slots: [9],    preamp: true},
+  {id: "3",    name: "Analogue 3", subkey: "lineinst",  slots: [10],   preamp: true},
+  {id: "4",    name: "Analogue 4", subkey: "lineinst",  slots: [11],   preamp: true},
+  {id: "pb12", name: "Playback 1-2", sub: "ssl12.pb12",  slots: [0, 1], dir: "MON L-R"},
+  {id: "pb34", name: "Playback 3-4", sub: "ssl12.pb34",  slots: [2, 3], dir: "LINE 3-4"},
+  {id: "pb56", name: "Playback 5-6", sub: "ssl12.pb56",  slots: [4, 5], dir: "HP A"},
+  {id: "pb78", name: "Playback 7-8", sub: "ssl12.pb78",  slots: [6, 7], dir: "HP B"},
+];
+const PREAMP_KEYS = [["48V", "48v", "red"], ["LINE", "inst", "blue"],
+                     ["HPF", "hpf", "green"], ["Ø", "phase", "amber"]];
+const MON_KEYS = [["DIM", "dim", "amber"], ["CUT", "cut", "red"],
+                  ["MONO", "mono", "blue"], ["Ø L", "invert-l", "blue"],
+                  ["ALT", "alt", "blue"], ["TALK", "talk", "amber"]];
+const SEND_BUSES = ["hpa", "hpb", "line34"];   // colonnes 2-4 de la matrice
+// vumètres : index dans la trame sub 09 — calibré en live les 17/08 (v2 corrigée :
+// bloc bus contigu 14-21, pb34 en 22/23)
+const BUS_METER_IDX = {Monitor: [20, 21], "HP A": [16, 17], "HP B": [18, 19], "Line 3-4": [14, 15]};
+const SRC_METER_IDX = {"1": [0], "2": [1], "3": [2], "4": [3],
+                       "pb12": [12, 13], "pb34": [22, 23], "pb56": [24, 25], "pb78": [26, 27]};
+
+const fmt = v => v === null || v === "off" ? "off"
+  : (v < 0 ? "−" : v > 0 ? "+" : "") +
+    Math.abs(v).toLocaleString(LANG === "fr" ? "fr-FR" : "en-GB",
+                               {minimumFractionDigits: 1});
+
+const api = c => fetch("/api", {method: "POST", body: JSON.stringify(c)})
+  .then(r => r.json()).then(r => { if (!r.ok) console.warn(r.error); return r; });
+
+let STATE = null;
+
+// ---------------------------------------------------------------- rendu
+function buildStrips() {
+  const root = document.getElementById("strips");
+  for (const c of CHANNELS) {
+    const el = document.createElement("div");
+    el.className = "strip"; el.dataset.ch = c.id;
+    el.innerHTML = `
+      <span class="name">${c.name}</span><span class="sub"${c.subkey ?
+        ` data-subkey="${c.subkey}"` : ""}>${c.subkey ? "" : c.sub}</span>
+      <div class="keys">${c.preamp ?
+        PREAMP_KEYS.map(([t, n, col]) =>
+          `<button class="key ${col}" data-preamp="${n}" aria-pressed="false">${t}</button>`).join("") :
+        `<button class="key amber" data-dir aria-pressed="false">DIR → ${c.dir}</button>`}</div>
+      <div class="fader">
+        <div class="meterbar"><i data-mch="${c.id}"></i><s class="pk"></s></div>
+        <input class="v" type="range" min="-85" max="12" value="-85" aria-label="Fader ${c.name}">
+      </div>
+      <output class="db mono">off</output>
+      <input class="pan" type="range" min="-100" max="100" value="0" aria-label="Pan ${c.name}">
+      <div class="keys">
+        <button class="key blue" data-solo aria-pressed="false">SOLO</button>
+        <button class="key red"  data-mute aria-pressed="false">CUT</button>
+      </div>`;
+    root.appendChild(el);
+  }
+}
+
+function buildMatrix() {
+  const mx = document.getElementById("mx");
+  for (const c of CHANNELS) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<th scope="row">${c.name}</th>` +
+      ["fader", ...SEND_BUSES].map(bus =>
+        `<td><button class="xp" data-ch="${c.id}" data-bus="${bus}">off</button></td>`).join("");
+    mx.appendChild(tr);
+  }
+}
+
+function buildMon() {
+  const mk = document.getElementById("monkeys");
+  mk.innerHTML = MON_KEYS.map(([t, n, col]) =>
+    `<button class="monkey ${col}" data-mon="${n}" aria-pressed="false">
+       <span class="led"></span>${t}</button>`).join("");
+  const bm = document.getElementById("busmeters");
+  bm.innerHTML = Object.keys(BUS_METER_IDX).map(name => `
+    <div class="busmeter"><div class="pair">
+      <div class="vmeter"><i data-bus-m="${name}:0"></i><s class="pk"></s></div>
+      <div class="vmeter"><i data-bus-m="${name}:1"></i><s class="pk"></s></div>
+    </div><span class="bname">${name}</span></div>`).join("");
+}
+
+function refresh(st) {
+  STATE = st;
+  for (const c of CHANNELS) {
+    const el = document.querySelector(`.strip[data-ch="${c.id}"]`);
+    const ch = (st.channels || {})[c.id] || {};
+    const fader = ch.fader === undefined ? "off" : ch.fader;
+    el.querySelector("input.v").value = fader === "off" ? -85 : fader;
+    el.querySelector("output.db").textContent = fader === "off" ? "off" : fmt(fader) + " dB";
+    el.querySelector(".pan").value = ch.pan || 0;
+    el.querySelector("[data-mute]").setAttribute("aria-pressed", !!ch.mute);
+    el.querySelector("[data-solo]").setAttribute("aria-pressed", !!ch.solo);
+    if (c.preamp) {
+      for (const [, n] of PREAMP_KEYS.map(k => [k[0], k[1]])) {
+        const on = ((st.preamp || {})[n] || {})[String(CHANNELS.indexOf(c))];
+        el.querySelector(`[data-preamp="${n}"]`).setAttribute("aria-pressed", !!on);
+      }
+    } else {
+      const on = !!(st.dir || {})[c.id];
+      el.querySelector("[data-dir]").setAttribute("aria-pressed", on);
+      el.classList.toggle("bypassed", on);
+    }
+    // matrice
+    for (const bus of ["fader", ...SEND_BUSES]) {
+      const xp = document.querySelector(`.xp[data-ch="${c.id}"][data-bus="${bus}"]`);
+      const v = bus === "fader" ? fader : ((st.sends || {})[c.id] || {})[bus];
+      const off = v === undefined || v === "off" || v === null;
+      xp.textContent = off ? "off" : fmt(v);
+      xp.classList.toggle("on", !off);
+      xp.dataset.db = off ? "" : v;
+    }
+  }
+  for (const [, n] of MON_KEYS.map(k => [k[0], k[1]])) {
+    const on = !!(st.monitoring || {})[n];
+    document.querySelector(`[data-mon="${n}"]`).setAttribute("aria-pressed", on);
+  }
+  const mon = (st.masters || {})["monitor"];
+  const mv = document.getElementById("mv"), mvr = document.getElementById("mvr");
+  if (mon !== undefined && mon !== "off") { mvr.value = mon; }
+  mv.innerHTML = fmt(parseFloat(mvr.value)) + "<small> dB</small>";
+  if ((st.masters || {})["hp-a"] !== undefined && st.masters["hp-a"] !== "off")
+    document.getElementById("hpa").value = st.masters["hp-a"];
+  if ((st.masters || {})["hp-b"] !== undefined && st.masters["hp-b"] !== "off")
+    document.getElementById("hpb").value = st.masters["hp-b"];
+  if (st.loopback) document.getElementById("lb").value = st.loopback;
+  const lv = st.monitoring_levels || {};
+  if (lv.dimlevel !== undefined) document.getElementById("dimlevel").value = lv.dimlevel;
+  if (lv.alttrim !== undefined) document.getElementById("alttrim").value = lv.alttrim;
+  if (st._clock) setClock(st._clock);
+  if (st._profiles) {
+    const sel = document.getElementById("profiles");
+    // `sel.value` ne survit pas à un rechargement de page : au démarrage il est
+    // vide et c'est `st.profile` (mémorisé côté serveur) qui dit quel profil est
+    // en place. Sans ça, la console était bien réglée mais la liste affichait « — ».
+    const want = sel.value || st.profile || "";
+    sel.innerHTML = '<option value="">—</option>' +
+      st._profiles.map(p => `<option>${p}</option>`).join("");
+    if (st._profiles.includes(want)) sel.value = want;
+
+    const dot = document.getElementById("prof-dirty");
+    dot.hidden = !(sel.value && st.profile_dirty);
+    dot.title = T("profdirty");
+  }
+}
+
+function setClock(rates) {
+  if (!rates || !rates.length) return;
+  const khz = rates[0] / 1000;
+  document.getElementById("clock").textContent =
+    khz.toLocaleString(LANG === "fr" ? "fr-FR" : "en-GB") + " kHz";
+}
+
+// ---------------------------------------------------------------- câblage
+function wire() {
+  for (const c of CHANNELS) {
+    const el = document.querySelector(`.strip[data-ch="${c.id}"]`);
+    const fader = el.querySelector("input.v"), db = el.querySelector("output.db");
+    let t = null;
+    fader.addEventListener("input", () => {
+      const v = parseFloat(fader.value);
+      db.textContent = v <= -85 ? "off" : fmt(v) + " dB";
+      clearTimeout(t);
+      t = setTimeout(() => api({cmd: "fader", ch: c.id, db: v <= -85 ? "off" : v})
+        .then(r => r.state && refresh(r.state)), 60);
+    });
+    el.querySelector(".pan").addEventListener("change", e =>
+      api({cmd: "pan", ch: c.id, pos: parseFloat(e.target.value)}));
+    el.querySelector("[data-mute]").addEventListener("click", e =>
+      api({cmd: "mute", ch: c.id,
+           on: e.currentTarget.getAttribute("aria-pressed") !== "true"})
+        .then(r => r.state && refresh(r.state)));
+    el.querySelector("[data-solo]").addEventListener("click", e =>
+      api({cmd: "solo", ch: c.id,
+           on: e.currentTarget.getAttribute("aria-pressed") !== "true"})
+        .then(r => r.state && refresh(r.state)));
+    el.querySelectorAll("[data-preamp]").forEach(k =>
+      k.addEventListener("click", () =>
+        api({cmd: "preamp", name: k.dataset.preamp, ch: CHANNELS.indexOf(c),
+             on: k.getAttribute("aria-pressed") !== "true"})
+          .then(r => r.state && refresh(r.state))));
+    const dirk = el.querySelector("[data-dir]");
+    if (dirk) dirk.addEventListener("click", () =>
+      api({cmd: "dir", ch: c.id, on: dirk.getAttribute("aria-pressed") !== "true"})
+        .then(r => r.state && refresh(r.state)));
+  }
+  // matrice : glisser = niveau, clic = on/off
+  for (const x of document.querySelectorAll(".xp")) {
+    let startY = null, startDb = null, moved = false, t = null;
+    const send = db => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        const cmd = x.dataset.bus === "fader"
+          ? {cmd: "fader", ch: x.dataset.ch, db}
+          : {cmd: "route", ch: x.dataset.ch, bus: x.dataset.bus, level: db};
+        api(cmd).then(r => r.state && refresh(r.state));
+      }, 60);
+    };
+    const show = db => {
+      if (db === "off") { x.textContent = "off"; x.classList.remove("on"); }
+      else { x.textContent = fmt(Math.round(db * 2) / 2); x.classList.add("on"); }
+    };
+    x.addEventListener("pointerdown", e => {
+      startY = e.clientY; moved = false;
+      startDb = x.dataset.db === "" ? -20 : parseFloat(x.dataset.db);
+      x.setPointerCapture(e.pointerId);
+    });
+    x.addEventListener("pointermove", e => {
+      if (startY === null) return;
+      const dy = startY - e.clientY;
+      if (Math.abs(dy) > 3) moved = true;
+      if (moved) {
+        const db = Math.max(-85, Math.min(12, startDb + dy / 3));
+        show(db); send(db); x.dataset.db = db;
+      }
+    });
+    x.addEventListener("pointerup", () => {
+      if (!moved) {
+        if (x.dataset.db === "") { const v = parseFloat(x.dataset.last || 0);
+          show(v); send(v); x.dataset.db = v; }
+        else { x.dataset.last = x.dataset.db; show("off"); send("off"); x.dataset.db = ""; }
+      }
+      startY = null;
+    });
+  }
+  document.querySelectorAll("[data-mon]").forEach(b =>
+    b.addEventListener("click", () =>
+      api({cmd: "mon", name: b.dataset.mon,
+           on: b.getAttribute("aria-pressed") !== "true"})
+        .then(r => r.state && refresh(r.state))));
+  const mvr = document.getElementById("mvr"), mv = document.getElementById("mv");
+  let mt = null;
+  mvr.addEventListener("input", () => {
+    mv.innerHTML = fmt(parseFloat(mvr.value)) + "<small> dB</small>";
+    clearTimeout(mt);
+    mt = setTimeout(() => api({cmd: "master", bus: "monitor",
+                               db: parseFloat(mvr.value)}), 60);
+  });
+  for (const [id, bus] of [["hpa", "hp-a"], ["hpb", "hp-b"]]) {
+    const s = document.getElementById(id); let ht = null;
+    s.addEventListener("input", () => {
+      clearTimeout(ht);
+      ht = setTimeout(() => api({cmd: "master", bus, db: parseFloat(s.value)}), 60);
+    });
+  }
+  document.getElementById("lb").addEventListener("change", e =>
+    api({cmd: "loopback", source: e.target.value}));
+  for (const [id, cmd] of [["dimlevel", "dimlevel"], ["alttrim", "alttrim"]]) {
+    const s = document.getElementById(id); let dt = null;
+    s.addEventListener("input", () => {
+      clearTimeout(dt);
+      dt = setTimeout(() => api({cmd, db: parseFloat(s.value)}), 60);
+    });
+  }
+  document.getElementById("profiles").addEventListener("change", e => {
+    if (e.target.value)
+      api({cmd: "profile-load", name: e.target.value})
+        .then(r => r.state && refresh(r.state));
+  });
+  document.getElementById("prof-save").addEventListener("click", () => {
+    const cur = document.getElementById("profiles").value;
+    const name = prompt(T("profname"), cur || "");
+    if (name) api({cmd: "profile-save", name})
+      .then(r => { if (r.state) { refresh(r.state);
+        document.getElementById("profiles").value = name.trim(); } });
+  });
+  document.getElementById("prof-del").addEventListener("click", () => {
+    const name = document.getElementById("profiles").value;
+    if (name && confirm(T("profdel").replace("%s", name)))
+      api({cmd: "profile-delete", name}).then(r => r.state && refresh(r.state));
+  });
+  const themeBtn = document.getElementById("theme");
+  themeBtn.addEventListener("click", () => {
+    const r = document.documentElement;
+    const light = r.getAttribute("data-theme") === "light";
+    r.setAttribute("data-theme", light ? "dark" : "light");
+    themeBtn.textContent = light ? T("theme_light") : T("theme_dark");
+  });
+  document.getElementById("lang").addEventListener("change", e => {
+    LANG = e.target.value;
+    localStorage.setItem("douze.lang", LANG);
+    applyLang();
+    if (STATE) refresh(STATE);   // reformater les dB au bon locale
+  });
+}
+
+// ---------------------------------------------------------------- live
+function meterHeight(v) {           // u16 → hauteur ; échelle à affiner en live
+  if (!v) return 0;
+  const db = 20 * Math.log10(v / 32768);
+  return Math.max(0, Math.min(1, (db + 60) / 60));
+}
+function startEvents() {
+  const es = new EventSource("/events");
+  EVSOURCE = es;                 // pour pouvoir le fermer pendant la veille
+  const conn = document.getElementById("conn"), lbl = document.getElementById("connlbl");
+  const etat = (perdue, cle) => {
+    conn.classList.toggle("err", perdue);
+    connKey = cle;
+    lbl.textContent = T(cle);
+    // Estompe toute la console : sans ça, seule une pastille de 8 px signalait
+    // que plus rien ne partait vers la carte.
+    document.body.classList.toggle("offline", perdue);
+  };
+  es.onopen = () => { etat(false, "connected");
+                      fetch("/state").then(r => r.json()).then(refresh); };
+  es.onerror = () => etat(true, "disconnected");
+  es.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.ev === "meters") {
+      const now = performance.now();
+      const updateBar = (b, raw) => {
+        const h = meterHeight(raw);
+        b.style.height = (h * 100) + "%";
+        const pk = b.parentElement.querySelector(".pk");
+        let peak = +b.dataset.pk || 0, t = +b.dataset.pkt || 0;
+        if (h >= peak || now - t > 1500) { peak = h; t = now; }   // hold 1,5 s
+        b.dataset.pk = peak; b.dataset.pkt = t;
+        pk.style.bottom = `calc(${(peak * 100).toFixed(1)}% - 1px)`;
+        if (raw >= 32700) b.dataset.clip = now;                   // clip hold 2 s
+        pk.classList.toggle("clip", now - (+b.dataset.clip || -9e9) < 2000);
+      };
+      document.querySelectorAll("[data-mch]").forEach(b => {
+        const idx = SRC_METER_IDX[b.dataset.mch] || [];
+        updateBar(b, Math.max(...idx.map(i => m.v[i] || 0), 0));
+      });
+      document.querySelectorAll("[data-bus-m]").forEach(b => {
+        const [name, side] = b.dataset.busM.split(":");
+        updateBar(b, m.v[BUS_METER_IDX[name][+side]] || 0);
+      });
+    } else if (m.ev === "clock") {
+      setClock(m.rates);
+    } else if (m.ev === "state") {
+      refresh(m.state);
+    } else if (m.ev === "bool") {
+      fetch("/state").then(r => r.json()).then(refresh);
+    } else if (m.ev === "fx") {
+      fxApply(m);                   // état des bandes, poussé par le démon
+    } else if (m.ev === "disconnected") {
+      etat(true, "devlost");        // la SSL 12 elle-même a disparu
+    }
+  };
+}
+
+// ------------------------------------------------------------ bandes d'effets
+//
+// Le démon relaie vers l'API de chaque bande (POST /fx {cmd:"api"}) : la page
+// n'a jamais à connaître les ports. L'état des bandes arrive par le flux
+// d'événements (ev: "fx"), poussé par le démon.
+
+// Échappement HTML. Les noms de plugins, de paramètres et de fichiers scannés
+// viennent du SYSTÈME DE FICHIERS, pas de nous : un nom contenant « < » cassait
+// la mise en page, et un nom malveillant injecterait du script dans une page qui
+// a tous les droits sur la carte et les bandes. Peu probable, mais le coût de
+// s'en protéger est d'une ligne.
+const esc = v => String(v ?? "").replace(/[&<>"']/g,
+  c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+
+let FXSTRIPS = [], FXPICKFOR = null;
+
+const fxPost = body => fetch("/fx", {method: "POST",
+  headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
+  .then(r => r.json());
+
+const fxApi = (id, path, body) => fxPost({cmd: "api", id, path, body});
+
+function fxChip(strip, stage, i, total) {
+  const el = document.createElement("div");
+  el.className = "fxchip" + (stage.error ? " err" : "") + (stage.bypass ? " byp" : "");
+  el.innerHTML = `<span>${esc(stage.name || "?")}</span>`
+    + `<i class="fxchipvu"><b id="fxsv-${strip.id}-${i}"></b></i>`;
+
+  // Déplacer un étage : l'ordre s'entend. Un débruiteur placé après un
+  // compresseur travaille sur un plancher de bruit déjà remonté.
+  const move = (label, to, title) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label; b.title = title;
+    b.onclick = () => fxPost({cmd: "chain_move", id: strip.id, from: i, to}).then(fxRefresh);
+    el.appendChild(b);
+  };
+  if (i > 0)         move("◀", i - 1, T("fxleft"));
+  if (i < total - 1) move("▶", i + 1, T("fxright"));
+
+  if (!strip.running) {
+    // Bande arrêtée : pas de moteur, donc ni paramètres ni GUI native — mais on
+    // garde le retrait, qui écrit simplement dans le rack.
+    el.insertAdjacentHTML("beforeend", `<button type="button" title="✕">✕</button>`);
+    el.lastElementChild.onclick = () =>
+      fxPost({cmd: "chain_remove", id: strip.id, index: i}).then(fxRefresh);
+    return el;
+  }
+
+  if (stage.error) {
+    el.insertAdjacentHTML("beforeend", `<span class="why">${esc(stage.error)}</span>`);
+    el.insertAdjacentHTML("beforeend",
+      `<button type="button" title="${T("fxretry")}">↻</button>`);
+    el.lastElementChild.onclick = () =>
+      fxApi(strip.id, "/chain/retry", {}).then(fxRefresh);
+  } else {
+    // Bypass PAR ÉTAGE. Il existait dans le moteur et était sauvegardé, mais
+    // rien ne le montrait ni ne le commandait : un réglage invisible qu'on
+    // enregistre est un piège (un étage resté bypassé revient bypassé au
+    // démarrage suivant sans qu'on sache pourquoi).
+    el.insertAdjacentHTML("beforeend",
+      `<button type="button" title="${T("fxbypass")}"
+               aria-pressed="${!!stage.bypass}">⊘</button>`);
+    el.lastElementChild.onclick = () =>
+      fxApi(strip.id, "/bypass", {index: i, on: !stage.bypass}).then(fxRefresh);
+
+    el.insertAdjacentHTML("beforeend",
+      `<button type="button" title="${T("fxparams")}">≡</button>`);
+    el.lastElementChild.onclick = () => fxOpenParams(strip, i, stage.name);
+    // Certains éditeurs natifs (les Waves via Wine) ne rendent jamais la main :
+    // les ouvrir figeait le thread de contrôle, jusqu'à ce que le watchdog
+    // relance la bande. Le moteur retient les coupables (deadman) ; ici on grise
+    // le bouton et on explique, au lieu d'offrir un clic qui coupe le son.
+    const hangs = !!stage.editor_hangs;
+    el.insertAdjacentHTML("beforeend",
+      `<button type="button" ${hangs ? "disabled" : ""}
+               title="${hangs ? T("fxguihang") : "GUI"}">▣</button>`);
+    if (!hangs) el.lastElementChild.onclick = () => fxApi(strip.id, "/editor", {index: i});
+  }
+
+  el.insertAdjacentHTML("beforeend", `<button type="button" title="✕">✕</button>`);
+  el.lastElementChild.onclick = () =>
+    fxApi(strip.id, "/chain/remove", {index: i}).then(fxRefresh);
+  return el;
+}
+
+// Charge DSP (100 % = à la limite du temps réel). Une chaîne légère vaut
+// 0,01 % : au dixième près elle afficherait « 0.0 » et donnerait l'impression
+// d'une mesure cassée.
+function fxFootHtml(s, live) {
+  const cpu = live.cpu ?? 0;
+  return `<span title="Charge DSP de la chaîne — 100 % = limite du temps réel">DSP
+            <b class="mono">${cpu.toFixed(cpu < 1 ? 2 : 1)} %</b></span>` +
+    (live.block ? `<span>Bloc <b class="mono">${live.block}</b></span>` : "") +
+    `<span>Latence <b class="mono">${live.latency ?? 0}</b></span>` +
+    `<span>Underruns <b class="mono">${live.xruns ?? 0}</b></span>` +
+    `<span class="mono" style="margin-left:auto">${s.node}</span>`;
+}
+
+function fxRender() {
+  const root = document.getElementById("fxlist");
+  root.textContent = "";
+
+  if (!FXSTRIPS.length) {
+    root.innerHTML = `<p class="hint">${T("fxnone")}</p>`;
+    return;
+  }
+
+  for (const s of FXSTRIPS) {
+    const live = s.live || {};
+    const band = document.createElement("div");
+    band.className = "fxband" + (s.running ? "" : " off");
+
+    // Une source PUITS VIRTUEL n'a pas de client dans le graphe (on le crée au
+    // démarrage) : elle n'a qu'un nom. Sans ce cas, la carte affichait « — ».
+    const vsink = s.source.kind === "virtualsink";
+    const srcName = vsink ? (s.source.name || "Puits virtuel")
+                          : (s.source.client || "—");
+    const srcSub = vsink ? T("fxvsinkhint")
+                         : ((s.source.channels || []).length
+                              ? "canal " + (s.source.channels || []).join(",") : "");
+    const dest = s.dest.kind === "virtualmic" ? (s.dest.name || "Micro virtuel")
+                                              : (s.dest.client || "—");
+    // Bloc de la bande = celui du graphe, forcément : PipeWire n'accorde pas de
+    // quantum par nœud. Il se règle en haut de la carte, pas ici.
+    const block = live.block || null;
+
+    const top = document.createElement("div");
+    top.className = "fxtop";
+    top.innerHTML =
+      `<h3>${esc(s.name)}</h3>` +
+      // « en marche » et « prête » sont deux choses : instancier une chaîne
+      // yabridge prend des secondes, pendant lesquelles l'API ne répond pas
+      // encore et les chips s'affichent d'après le rack. Le dire évite de croire
+      // à un plugin renommé ou à des niveaux morts.
+      // Trois états, pas deux : une bande FIGÉE (thread de contrôle pendu par un
+      // éditeur, mais thread audio toujours vivant) s'affichait « Démarrage… »
+      // indéfiniment. On distingue, et on le dit dans le bon sens : le son passe.
+      (!s.running ? `<span class="pill">${T("fxstopped")}</span>`
+        : s.ready ? `<span class="pill live">${live.backend || "JACK"}</span>`
+        : s.frozen ? `<span class="pill amber">${T("fxfrozen")}</span>`
+                   : `<span class="pill">${T("fxstarting")}</span>`) +
+      (s.problem ? `<span class="pill err">${esc(s.problem)}</span>` : "") +
+      `<div class="acts"></div>`;
+    const acts = top.querySelector(".acts");
+
+    // Démarrage auto : réglage PERSISTANT, donc à portée de clic sur la bande
+    // elle-même plutôt qu'enfoui dans un dialogue de création qu'on ne revoit
+    // jamais.
+    const mkAuto = () => mk(T("fxautostart"),
+      () => fxPost({cmd: "update", id: s.id,
+                    patch: {autostart: !s.autostart}}).then(fxRefresh),
+      !!s.autostart, "green");
+
+    // `couleur` reprend la convention déjà en place dans la page
+    // (`.key.green[aria-pressed=true]` etc.) : un état actif doit se VOIR, pas
+    // seulement s'enfoncer d'un pixel.
+    const mk = (label, fn, pressed, couleur) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "key" + (couleur ? " " + couleur : "");
+      b.textContent = label;
+      if (pressed !== undefined) b.setAttribute("aria-pressed", String(pressed));
+      b.onclick = fn;
+      acts.appendChild(b);
+    };
+
+    // Le câblage se corrige bande EN MARCHE comme à l'arrêt : c'est justement en
+    // écoutant qu'on s'aperçoit qu'on s'est trompé de source.
+    const mkEdit = () => mk(T("fxedit"), () => fxOpenNew(s));
+
+    if (s.frozen) {
+      // Son API ne répond plus : bypass, chaîne et presets passeraient tous par
+      // elle et resteraient pendus. On ne propose donc QUE ce qui marche encore,
+      // et la relance reste un choix — le son continue de passer en attendant.
+      mkAuto();
+      mk(T("fxrestart"), () => {
+        if (!confirm(T("fxrestartask"))) return;
+        fxPost({cmd: "stop", id: s.id})
+          .then(() => fxPost({cmd: "start", id: s.id}))
+          .then(fxRefresh);
+      }, undefined, "amber");
+      mkEdit();
+    } else if (s.running) {
+      mkAuto();
+      // Ambre pour le bypass : c'est un état qui doit inquiéter un peu (la bande
+      // ne traite plus rien), pas un réglage anodin.
+      mk(T("fxbypass"), () => fxApi(s.id, "/bypass", {on: !live.bypass}).then(fxRefresh),
+         !!live.bypass, "amber");
+      // Les modifications de chaîne à chaud vivent en mémoire : sans ça, elles
+      // seraient perdues au prochain démarrage. La sauvegarde embarque aussi
+      // l'état interne de chaque plugin (ses réglages).
+      mk(T("fxsave"), function () {
+        const b = this;
+        fxApi(s.id, "/preset/save", {}).then(() => {
+          const old = b.textContent;
+          b.textContent = T("fxsaved");
+          setTimeout(() => { b.textContent = old; }, 1500);
+        });
+      });
+      mkEdit();
+      mk(T("fxstop"), () => fxPost({cmd: "stop", id: s.id}).then(fxRefresh));
+    } else {
+      mk(T("fxstart"), () => fxPost({cmd: "start", id: s.id}).then(fxRefresh));
+      mkEdit();
+      // Suppression seulement à l'arrêt : supprimer une bande en marche
+      // reviendrait à tuer un flux audio en cours d'usage.
+      mk(T("fxdel"), () => {
+        if (confirm(T("fxdelask").replace("%s", s.name)))
+          fxPost({cmd: "remove", id: s.id}).then(fxRefresh);
+      });
+    }
+    band.appendChild(top);
+
+    const flow = document.createElement("div");
+    flow.className = "fxflow";
+    const meter = id => s.running ? `<div class="fxmeter"><i id="${id}"></i></div>` : "";
+
+    flow.innerHTML =
+      `<div class="fxnode"><span class="lbl">Source</span>
+         <div class="v">${esc(srcName)}</div>
+         <div class="s">${esc(srcSub)}</div>
+         ${meter("fxm-in-" + s.id)}</div>
+       <div class="fxchain"></div>
+       <div class="fxnode"><span class="lbl">Destination</span>
+         <div class="v">${dest}</div>
+         <div class="s">${s.dest.kind === "virtualmic" ? "source virtuelle" : ""}</div>
+         ${meter("fxm-out-" + s.id)}</div>`;
+
+    // La chaîne vient du moteur si la bande tourne, du rack sinon : une bande
+    // arrêtée reste éditable (sans ça, une bande dont le moteur est tombé est
+    // une impasse).
+    const chain = flow.querySelector(".fxchain");
+    const stages = s.chain || [];
+    stages.forEach((st, i) => chain.appendChild(fxChip(s, st, i, stages.length)));
+
+    if (!stages.length)
+      chain.insertAdjacentHTML("beforeend", `<span class="hint">${T("fxempty")}</span>`);
+
+    const add = document.createElement("button");
+    add.type = "button"; add.className = "fxchip add"; add.textContent = T("fxadd");
+    add.onclick = () => fxOpenPicker(s.id, s.running);
+    chain.appendChild(add);
+    band.appendChild(flow);
+
+    if (s.running) {
+      const foot = document.createElement("div");
+      foot.className = "fxfoot";
+      foot.id = "fxfoot-" + s.id;          // rafraîchi sans redessiner la bande
+      foot.innerHTML = fxFootHtml(s, live);
+      band.appendChild(foot);
+    }
+
+    root.appendChild(band);
+  }
+
+  const add = document.createElement("button");
+  add.type = "button"; add.className = "key"; add.textContent = T("fxnew");
+  // Pas `add.onclick = fxOpenNew` : un gestionnaire reçoit l'ÉVÉNEMENT en
+  // premier argument, que le dialogue prendrait pour une bande à modifier.
+  add.onclick = () => fxOpenNew();
+  root.appendChild(add);
+}
+
+// ----- création / modification d'une bande -----
+// Le MÊME dialogue sert aux deux : le câblage d'une bande se relit et se corrige
+// là où on l'a écrit. Avant, une bande mal câblée ne se réparait qu'en la
+// supprimant et en la recréant — ce qui jetait son rack au passage.
+let FXEDIT = null;                       // la bande modifiée, ou null
+
+function fxOpenNew(s) {
+  FXEDIT = s || null;
+  const src = document.getElementById("fxnsrc"), dst = document.getElementById("fxndest");
+  // Le PUITS VIRTUEL en tête des sources : c'est le seul point d'entrée qui
+  // n'existe pas encore dans le graphe (on le crée au démarrage de la bande), et
+  // c'est celui qui permet d'envoyer une application — Discord, un navigateur —
+  // dans une chaîne d'effets puis vers la sortie qu'on veut.
+  src.innerHTML = `<option value="virtualsink">${T("fxnvsink")}</option>`;
+  dst.innerHTML = `<option value="virtualmic">${T("fxndest")} — micro virtuel</option>`;
+
+  // On ne propose que les points RÉELLEMENT présents dans le graphe.
+  fxPost({cmd: "points"}).then(p => {
+    for (const pt of (p.sources || [])) {
+      const o = document.createElement("option");
+      o.value = pt.client;
+      o.textContent = `${pt.client}${pt.channels ? "  (" + pt.channels + " ch)" : ""}`;
+      src.appendChild(o);
+    }
+    for (const d of (p.destinations || [])) {
+      const o = document.createElement("option");
+      o.value = d.client;
+      o.textContent = `${d.client}${d.channels ? "  (" + d.channels + " ch)" : ""}`;
+      dst.appendChild(o);
+    }
+  // Le pré-remplissage attend la liste : poser une valeur sur un <select> vide
+  // ne colle pas, et le dialogue se serait ouvert sur la mauvaise source. Le
+  // `catch` compte : même sans le graphe, on doit montrer le câblage enregistré
+  // plutôt qu'un formulaire vide qui ferait tout perdre au premier clic.
+  }).catch(() => {}).then(() => { if (s) fxFill(s); });
+
+  const titre = document.getElementById("fxntitle");
+  const bouton = document.getElementById("fxncreate");
+  const hint = document.getElementById("fxnhint");
+  const cle = (el, k) => { el.dataset.i18n = k; el.textContent = T(k); };
+  cle(titre, s ? "fxedittitle" : "fxnewtitle");
+  cle(bouton, s ? "fxnsaveedit" : "fxncreate");
+  cle(hint, s && s.running ? "fxedithint" : "fxnhint");
+  document.getElementById("fxnew").showModal();
+}
+
+// Remet dans le formulaire le câblage d'une bande existante. `garde` ajoute
+// l'option manquante plutôt que de laisser le navigateur choisir à notre place.
+function fxFill(s) {
+  const set = (id, v) => { document.getElementById(id).value = v; };
+  const garde = (sel, v) => {
+    if (!v) return;
+    if (![...sel.options].some(o => o.value === v)) {
+      const o = document.createElement("option");
+      o.value = v; o.textContent = `${v} — ${T("fxabsent")}`;
+      sel.appendChild(o);
+    }
+    sel.value = v;
+  };
+  set("fxnname", s.name || "");
+  garde(document.getElementById("fxnsrc"),
+        s.source && s.source.kind === "virtualsink" ? "virtualsink"
+                                                    : (s.source || {}).client);
+  garde(document.getElementById("fxndest"),
+        s.dest && s.dest.kind === "virtualmic" ? "virtualmic"
+                                               : (s.dest || {}).client);
+  set("fxnch", ((s.source || {}).channels || [1, 2]).join(","));
+  set("fxncut", (s.cut_direct || []).join(","));
+  document.getElementById("fxnauto").checked = !!s.autostart;
+}
+
+function fxCreate() {
+  const v = id => document.getElementById(id).value.trim();
+  const nums = s => s.split(",").map(x => parseInt(x, 10)).filter(n => n > 0);
+
+  // En MODIFICATION, le nom d'un nœud virtuel déjà existant est conservé : il
+  // est ce que les applications ont choisi dans leurs réglages. Le déduire à
+  // nouveau du nom de la bande renommerait le nœud au premier enregistrement —
+  // et Discord se retrouverait sans micro sans que personne n'ait rien demandé.
+  const anc = FXEDIT || {};
+  const garde = (avant, kind, defaut) =>
+    (avant && avant.kind === kind && avant.name) || defaut;
+
+  const dest = v("fxndest") === "virtualmic"
+    ? {kind: "virtualmic",
+       name: garde(anc.dest, "virtualmic", v("fxnname") || "Douze FX")}
+    : {kind: "jack", client: v("fxndest"), channels: [1, 2]};
+
+  // Un puits virtuel n'a pas de canaux à choisir : il est stéréo, comme les
+  // applications qu'on y envoie.
+  const source = v("fxnsrc") === "virtualsink"
+    ? {kind: "virtualsink",
+       name: garde(anc.source, "virtualsink",
+                   (v("fxnname") || "Douze FX") + " (retour)")}
+    : {client: v("fxnsrc"), channels: nums(v("fxnch"))};
+
+  const strip = {
+    name: v("fxnname") || "Bande",
+    source,
+    dest,
+    // Coché par défaut : une bande qu'on vient de créer, on la veut au démarrage
+    // suivant. Sans ce réglage, seule la bande micro repartait et les autres
+    // restaient éteintes sans qu'on comprenne pourquoi.
+    autostart: document.getElementById("fxnauto").checked,
+    cut_direct: v("fxncut") ? v("fxncut").split(",").map(s => s.trim()) : [],
+  };
+
+  // En modification, `id` et `rack` ne sont PAS touchés : c'est ce qui distingue
+  // « corriger le câblage » de « refaire la bande ». Le rack et ses réglages
+  // survivent au recâblage.
+  const req = FXEDIT === null
+    ? {cmd: "add", strip}
+    : {cmd: "update", id: FXEDIT.id, patch: strip};
+
+  fxPost(req).then(r => {
+    document.getElementById("fxnew").close();
+    FXEDIT = null;
+    // Un recâblage ARRÊTE puis relance la bande. Si la relance échoue (moteur
+    // occupé, point de câblage disparu), la bande reste à l'arrêt : il faut le
+    // dire, sinon le silence qui suit passe pour une panne inexpliquée.
+    if (r && r.restarted === false && r.msg && r.msg !== "enregistrée")
+      alert(r.msg);
+    fxRefresh();
+  });
+}
+
+// Un SEUL interrogateur : le moteur remet ses crêtes à zéro à chaque lecture,
+// donc deux boucles concurrentes se voleraient les pics et les vumètres
+// sauteraient. On lit vite (vumètres) et on ne redessine que si la forme de la
+// bande a changé — sinon un dialogue ouvert se ferait arracher sous les doigts.
+let FXSIG = "";
+
+function fxSetMeter(el, peak) {
+  if (!el) return;
+  const p = peak || 0;
+  // Échelle en dB : à l'oreille, une voix normale vit entre -40 et -6 dBFS ;
+  // en linéaire elle resterait collée en bas du vumètre.
+  const db = p > 0 ? 20 * Math.log10(p) : -100;
+  el.style.width = Math.max(0, Math.min(100, (db + 60) / 60 * 100)) + "%";
+  el.className = p > 0.89 ? "clip" : (p > 0.5 ? "hi" : "");
+}
+
+// Rendu de l'état des bandes. Alimenté par le bus d'événements (le démon pousse
+// à 2,5 Hz) ; `fxTick` reste là pour une relecture À LA DEMANDE, après une action.
+function fxApply(d) {
+    FXSTRIPS = d.strips || [];
+    const sig = JSON.stringify(FXSTRIPS.map(s =>
+      [s.id, s.name, s.running, s.ready, !!s.frozen, s.problem || "", !!s.autostart,
+       (s.chain || []).map(c => [c.name, c.error || "", c.bypass, !!c.editor_hangs])]));
+
+    if (sig !== FXSIG) { FXSIG = sig; fxRender(); }
+
+    for (const s of FXSTRIPS) {
+      const live = s.live || {};
+      fxSetMeter(document.getElementById("fxm-in-" + s.id), live.in_peak);
+      fxSetMeter(document.getElementById("fxm-out-" + s.id), live.out_peak);
+      const f = document.getElementById("fxfoot-" + s.id);
+      if (f && s.running) f.innerHTML = fxFootHtml(s, live);
+
+      (s.chain || []).forEach((c, i) =>
+        fxSetMeter(document.getElementById(`fxsv-${s.id}-${i}`), c.peak));
+    }
+}
+
+// Relecture immédiate, pour ne pas attendre la prochaine diffusion après un clic.
+function fxTick() {
+  return fetch("/fx").then(r => r.json()).then(fxApply).catch(() => {});
+}
+
+// Force un redessin. Le rappel de profil suit : toute modification manuelle d'une
+// bande le défait côté démon, et l'affichage doit cesser de nommer un profil que
+// la configuration ne reflète plus.
+const fxRefresh = () => { FXSIG = ""; fxProfRefresh(); return fxTick(); };
+
+// ----- horloge du graphe (quantum + taux d'échantillonnage) -----
+//
+// C'est le réglage que prennent les DAW : tant qu'un force-quantum est posé,
+// toute demande d'une bande est ignorée. Il est GLOBAL — toutes les applis
+// audio de la machine suivent — d'où l'avertissement affiché.
+
+function fxGraphRender(g) {
+  const box = document.getElementById("fxgraph");
+  if (!g || !g.rate) { box.textContent = ""; return; }
+
+  const ms = q => (q / g.rate * 1000).toFixed(1);
+  const quanta = [64, 128, 256, 512, 1024, 2048]
+    .filter(q => q >= (g.min_quantum || 64) && q <= (g.max_quantum || 2048));
+
+  box.innerHTML =
+    `<span class="lbl">${T("fxgraph")}</span>` +
+    `<span>${T("fxblocklbl")} <select id="fxgq"></select> <b class="mono">${ms(g.quantum)} ms</b></span>` +
+    `<span>${T("fxratelbl")} <select id="fxgr"></select></span>` +
+    `<button type="button" class="key" id="fxgauto">${T("fxauto")}</button>` +
+    (g.device_period
+      ? `<span class="note">${T("fxdevnote")
+           .replace("%d", g.device)
+           .replace("%p", g.device_period)}</span>` : "");
+
+  const q = box.querySelector("#fxgq"), r = box.querySelector("#fxgr");
+  for (const v of quanta) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = v; o.selected = (v === g.quantum);
+    q.appendChild(o);
+  }
+  for (const v of (g.allowed_rates || [g.rate])) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = (v / 1000).toFixed(1) + " kHz"; o.selected = (v === g.rate);
+    r.appendChild(o);
+  }
+  q.onchange = () => fxPost({cmd: "set_graph", quantum: +q.value}).then(fxGraphRender);
+  r.onchange = () => fxPost({cmd: "set_graph", rate: +r.value}).then(fxGraphRender);
+  // 0 = on relâche : PipeWire re-négocie librement au lieu de subir un
+  // force-quantum laissé par une appli fermée depuis longtemps.
+  box.querySelector("#fxgauto").onclick =
+    () => fxPost({cmd: "set_graph", quantum: 0, rate: 0}).then(fxGraphRender);
+}
+
+function fxGraphRefresh() {
+  return fxPost({cmd: "graph"}).then(fxGraphRender).catch(() => {});
+}
+
+// ----- profils de bandes -----
+// Distincts des profils du mixer (en-tête) : ceux-ci rappellent un JEU DE BANDES
+// complet — quelles bandes existent, leur câblage, leurs chaînes.
+function fxProfRender(d) {
+  const sel = document.getElementById("fxprofiles");
+  const courant = d.profile || "";
+  sel.innerHTML = `<option value="">—</option>` +
+    (d.profiles || []).map(p => `<option>${esc(p)}</option>`).join("");
+  // Pas de rappel courant = configuration bricolée depuis le dernier
+  // enregistrement : le champ reste sur « — » plutôt que de mentir.
+  sel.value = (d.profiles || []).includes(courant) ? courant : "";
+}
+
+function fxProfRefresh() {
+  return fxPost({cmd: "profiles"}).then(fxProfRender).catch(() => {});
+}
+
+function fxProfInit() {
+  const sel = document.getElementById("fxprofiles");
+
+  sel.onchange = () => {
+    const nom = sel.value;
+    if (!nom) return;
+    // Un rappel COUPE le son des bandes en cours : ça se confirme.
+    if (!confirm(T("fxprofask").replace("%s", nom))) return fxProfRefresh();
+    fxPost({cmd: "profile_load", name: nom}).then(d => {
+      fxProfRender(d); fxRefresh();
+    });
+  };
+
+  document.getElementById("fxprofsave").onclick = () => {
+    const nom = prompt(T("fxprofname"), sel.value || "");
+    if (!nom) return;
+    fxPost({cmd: "profile_save", name: nom}).then(fxProfRender);
+  };
+
+  document.getElementById("fxprofdel").onclick = () => {
+    const nom = sel.value;
+    if (!nom) return;
+    if (!confirm(T("fxprofdelask").replace("%s", nom))) return;
+    fxPost({cmd: "profile_delete", name: nom}).then(fxProfRender);
+  };
+}
+
+// ----- picker de plugins -----
+let FXPICKLIVE = true;
+
+let FXCAT = [];             // catalogue complet, chargé une seule fois
+let FXSORT = "az";          // az | brand | type
+
+function fxOpenPicker(id, running) {
+  FXPICKFOR = id; FXPICKLIVE = !!running;
+  document.getElementById("fxq").value = "";
+  document.getElementById("fxresults").innerHTML = `<p class="hint">…</p>`;
+  document.getElementById("fxscanbar").hidden = true;
+  document.getElementById("fxpicker").showModal();
+  fxLoadCatalogue().then(fxSearch);
+  // Un scan a pu être lancé avant l'ouverture du panneau : on regarde une fois,
+  // et la sonde s'arrêtera d'elle-même s'il n'y a rien.
+  fxScanWatch();
+}
+
+// Catalogue chargé EN ENTIER une fois, puis filtré et trié côté client.
+// Avant, chaque frappe repartait interroger le moteur avec `limit=40` : on ne
+// voyait jamais plus de 40 plugins sur ~1600, et aucun tri global n'était
+// possible puisque le tri se serait appliqué à ces 40 seuls.
+function fxLoadCatalogue(force) {
+  if (FXCAT.length && !force) return Promise.resolve();
+  const query = "limit=10000";
+  // Bande arrêtée : pas de moteur à interroger, le démon passe par une autre
+  // bande vivante — le catalogue de plugins est commun à toutes.
+  const req = FXPICKLIVE ? fxApi(FXPICKFOR, "/plugins?" + query)
+                         : fxPost({cmd: "plugins", query});
+  return req.then(d => { FXCAT = d.plugins || []; }).catch(() => { FXCAT = []; });
+}
+
+// Les catégories VST3 sont trop fines pour servir de groupes : « Fx|Analyzer|Pitch
+// Shift », « Fx|Channel Strip »… On enlève le préfixe générique et on garde le
+// premier segment utile. Sur le parc réel (1668 plugins) ça donne 39 groupes
+// exploitables — Dynamics 397, EQ 238, Distortion 154, Reverb 69… — là où la
+// catégorie brute en produisait des dizaines à un ou deux éléments.
+function fxTypeOf(p) {
+  return (p.category || "").replace(/^(Fx|Effect|Instrument)\|/, "").split("|")[0];
+}
+
+// ----- scan du parc de plugins -----
+let FXSCANTIMER = null;
+
+function fxScanTick() {
+  return fxPost({cmd: "scan_status"}).then(d => {
+    const s = d.scan || {};
+    const bar = document.getElementById("fxscanbar");
+    bar.hidden = !s.running;
+
+    if (s.running) {
+      const pct = s.total ? Math.round(s.done / s.total * 100) : 0;
+      document.getElementById("fxprogbar").style.width = pct + "%";
+      // Le nom du plugin EN COURS est ce qu'on veut lire : c'est lui qui
+      // explique une attente, et c'est lui qu'on vise avec « Passer ».
+      const bilan = s.added || s.errors
+        ? ` <span class="soft">· ${s.added} ${T("fxadded")}` +
+          (s.errors ? `, ${s.errors} ${T("fxfailed")}` : "") + `</span>`
+        : "";
+      document.getElementById("fxprogtxt").innerHTML =
+        `<span class="soft">${s.done}/${s.total}</span> <b>${esc(s.current || "…")}</b>${bilan}`;
+      return;
+    }
+
+    // Fin de passe : on relit le catalogue, sinon les plugins tout juste
+    // découverts n'apparaîtraient qu'à la prochaine ouverture du panneau.
+    fxScanStopWatch();
+    // Le bilan est posé APRÈS `fxSearch`, qui réécrit ce même compteur : dans
+    // l'autre ordre le message disparaissait aussitôt affiché.
+    fxLoadCatalogue(true).then(() => {
+      fxSearch();
+      if (s.message) document.getElementById("fxcount").textContent = s.message;
+    });
+  }).catch(() => {});
+}
+
+function fxScanStart(full) {
+  fxPost({cmd: "scan", full: !!full}).then(d => {
+    if (d && d.ok === false) { alert(d.msg || "?"); return; }
+    // On ne DÉVOILE PAS la barre ici : c'est l'état réel qui décide. Sinon un
+    // scan qui n'a rien à faire faisait apparaître une barre vide, avec ses
+    // boutons Passer/Arrêter, pour une action déjà terminée.
+    fxScanWatch();
+  });
+}
+
+// Sonde l'état du scan tant qu'il tourne ; s'arrête d'elle-même.
+function fxScanWatch() {
+  if (!FXSCANTIMER) FXSCANTIMER = setInterval(fxScanTick, 1000);
+  fxScanTick();
+}
+
+function fxScanStopWatch() {
+  if (FXSCANTIMER) { clearInterval(FXSCANTIMER); FXSCANTIMER = null; }
+}
+
+function fxSortKey(p) {
+  return FXSORT === "brand" ? (p.manufacturer || "")
+       : FXSORT === "type"  ? fxTypeOf(p) : "";
+}
+
+function fxSearch() {
+  const q = document.getElementById("fxq").value.trim().toLowerCase();
+  const box = document.getElementById("fxresults");
+  const cmp = (a, b) => (a || "").localeCompare(b || "", undefined, {sensitivity: "base"});
+
+  const rows = FXCAT.filter(p => !q ||
+    [p.name, p.manufacturer, p.category].some(v => (v || "").toLowerCase().includes(q)));
+
+  rows.sort((a, b) => {
+    if (FXSORT !== "az") {
+      const ka = fxSortKey(a), kb = fxSortKey(b);
+      // Clés VIDES en dernier : un groupe « sans marque » ne doit pas ouvrir la
+      // liste et repousser tout le reste.
+      if (!ka !== !kb) return ka ? -1 : 1;
+      const c = cmp(ka, kb);
+      if (c) return c;
+    }
+    return cmp(a.name, b.name);
+  });
+
+  box.textContent = "";
+  let groupe = null;
+
+  for (const p of rows) {
+    if (FXSORT !== "az") {
+      const k = fxSortKey(p) || T(FXSORT === "brand" ? "fxnobrand" : "fxnotype");
+      if (k !== groupe) {
+        groupe = k;
+        const h = document.createElement("div");
+        h.className = "fxgroup";
+        h.textContent = k;
+        box.appendChild(h);
+      }
+    }
+    const row = document.createElement("div");
+    row.className = "fxrow";
+    row.innerHTML = `<span class="nm">${esc(p.name)}</span>
+      <span class="meta">${esc(p.manufacturer || "")} · ${esc(p.category || "")}</span>`;
+    row.onclick = () => {
+      document.getElementById("fxpicker").close();
+      fxPost({cmd: "chain_add", id: FXPICKFOR, path: p.path}).then(fxRefresh);
+    };
+    box.appendChild(row);
+  }
+
+  if (!rows.length) box.innerHTML = `<p class="hint">—</p>`;
+  document.getElementById("fxcount").textContent =
+    `${rows.length} / ${FXCAT.length}`;
+
+  for (const s of ["az", "brand", "type"])
+    document.getElementById("fxsort-" + s)
+            .setAttribute("aria-pressed", String(FXSORT === s));
+}
+
+// ----- paramètres d'un étage -----
+function fxOpenParams(strip, stage, name) {
+  document.getElementById("fxparamstitle").textContent = `${name} — ${T("fxparams")}`;
+  const body = document.getElementById("fxparamsbody");
+  body.innerHTML = `<p class="hint">…</p>`;
+  document.getElementById("fxparams").showModal();
+
+  fxApi(strip.id, `/params?stage=${stage}`).then(d => {
+    body.textContent = "";
+    (d.params || []).forEach((p, i) => {
+      const row = document.createElement("div");
+      row.className = "prow";
+      row.innerHTML = `<label>${esc(p.name)}</label>
+        <input type="range" min="0" max="1000" value="${Math.round(p.value * 1000)}">
+        <span class="val mono">${esc(p.text || "")}</span>`;
+      const val = row.querySelector(".val");
+      row.querySelector("input").oninput = e => {
+        fxApi(strip.id, "/params", {stage, index: i, value: e.target.value / 1000})
+          .then(() => fxApi(strip.id, `/params?stage=${stage}`))
+          .then(d2 => { val.textContent = (d2.params || [])[i]?.text || ""; });
+      };
+      body.appendChild(row);
+    });
+    if (!(d.params || []).length) body.innerHTML = `<p class="hint">—</p>`;
+  });
+}
+
+function fxWire() {
+  document.getElementById("fxq").addEventListener("input", fxSearch);
+  for (const s of ["az", "brand", "type"])
+    document.getElementById("fxsort-" + s).onclick = () => { FXSORT = s; fxSearch(); };
+  document.getElementById("fxscan").onclick = () => fxScanStart(false);
+  document.getElementById("fxscanfull").onclick = () => fxScanStart(true);
+  document.getElementById("fxscanskip").onclick = () => fxPost({cmd: "scan_skip"});
+  document.getElementById("fxscanstop").onclick = () => fxPost({cmd: "scan_stop"});
+  document.getElementById("fxpickclose").onclick = () => {
+    fxScanStopWatch();          // panneau fermé : plus rien à sonder
+    document.getElementById("fxpicker").close();
+  };
+  document.getElementById("fxparamsclose").onclick =
+    () => document.getElementById("fxparams").close();
+  document.getElementById("fxnewclose").onclick =
+    () => document.getElementById("fxnew").close();
+  document.getElementById("fxncreate").onclick = fxCreate;
+  fxProfInit();
+  fxRefresh();
+  fxGraphRefresh();
+  fxProfRefresh();
+  // 400 ms : assez rapide pour un vumètre utile (les crêtes sont cumulées côté
+  // moteur entre deux lectures, donc rien ne se perd), assez lent pour rester
+  // gratuit en CPU.
+  // Plus de sondage périodique de /fx : le démon POUSSE l'état des bandes sur le
+  // flux d'événements (ev: "fx"), une seule fois pour toutes les pages ouvertes.
+  // L'horloge du graphe, elle, bouge rarement et une autre appli peut la changer
+  // dans notre dos : on relit peu souvent, mais on relit.
+  FXGRAPHTIMER = setInterval(fxGraphRefresh, 10000);
+}
+
+// ----- veille quand la page n'est pas visible -----
+//
+// Mesuré : fenêtre ouverte, l'affichage coûte ~30 % d'un cœur (vumètres à 15 Hz
+// via SSE + sondage FX à 400 ms + rendu WebKit). Ce n'est pas gratuit : le
+// compteur DSP d'une bande mesure du TEMPS ÉCOULÉ, donc cette dépense se lit
+// comme de la charge DSP et vole du CPU à l'audio. Une fenêtre cachée (croix de
+// l'application, qui masque au lieu de fermer) ou un onglet en arrière-plan
+// continuait pourtant de tout rafraîchir pour personne.
+let FXGRAPHTIMER = null, EVSOURCE = null;
+
+function douzeVeille() {
+  for (const t of [FXGRAPHTIMER, FXSCANTIMER]) if (t) clearInterval(t);
+  FXGRAPHTIMER = FXSCANTIMER = null;
+  // Fermer le flux suffit à faire taire le démon : sans auditeur, il n'interroge
+  // plus les bandes du tout.
+  if (EVSOURCE) { EVSOURCE.close(); EVSOURCE = null; }
+}
+
+function douzeReveil() {
+  if (EVSOURCE) return;                      // déjà réveillée
+  FXGRAPHTIMER = setInterval(fxGraphRefresh, 10000);
+  if (!EVSOURCE) startEvents();              // rouvre le flux d'événements
+  // On a pu manquer des changements pendant la veille : on relit tout.
+  fetch("/state").then(r => r.json()).then(refresh).catch(() => {});
+  fxRefresh(); fxGraphRefresh(); fxProfRefresh();
+}
+
+document.addEventListener("visibilitychange",
+  () => document.hidden ? douzeVeille() : douzeReveil());
+
+buildStrips(); buildMatrix(); buildMon(); wire(); applyLang();
+fxWire();
+fetch("/state").then(r => r.json()).then(st => { refresh(st); startEvents(); });
+</script>
+</body>
+</html>

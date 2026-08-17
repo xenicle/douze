@@ -10,7 +10,14 @@ l'afficher, de le démarrer s'il dort, et de le piloter par HTTP.
   - « Quitter » ferme l'application, jamais le démon ;
   - l'icône change d'état quand le démon ne répond plus.
 
-Lancement : `tools/douze-app.sh` (qui pose l'environnement GTK/WebKit).
+Lancement : `python3 tools/douze-app.py`. Nécessite PyGObject + GTK 3 +
+WebKit2GTK 4.1 (et libayatana-appindicator pour l'icône de barre — sans elle
+l'application tourne quand même, fenêtre seule).
+
+⚠️ Depuis un devShell Nix, vider l'environnement d'abord :
+`env -u LD_LIBRARY_PATH -u PYTHONPATH -u GI_TYPELIB_PATH python3 tools/douze-app.py`
+— sinon des bibliothèques d'un AUTRE nixpkgs sont héritées et Pango s'effondre à
+l'import. `tools/install-douze-app.sh` pose un lanceur `.desktop` qui le fait.
 """
 
 import json

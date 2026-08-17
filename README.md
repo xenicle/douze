@@ -176,6 +176,14 @@ journalctl --user -u douze -f
 
 ## Using `sslctl`
 
+There is no installed binary — it's a script in the checkout. Either call it
+directly, or make yourself an alias:
+
+```bash
+python tools/sslctl.py status
+alias sslctl='python /path/to/douze/tools/sslctl.py'   # then the lines below work as written
+```
+
 ```bash
 sslctl status                       # what the device itself reports
 sslctl show                         # logical mixer state
@@ -198,6 +206,52 @@ sslctl user 1 talkback              # reassign a USER button
 power cycle, since the device starts blank.
 
 ---
+
+## Desktop app (optional)
+
+The GUI is a web page, so a browser tab is enough. If you'd rather have a real
+window and a tray icon, `tools/douze-app.py` is a thin GTK/WebKit client around
+it.
+
+It is **only a client**. The daemon keeps the card and the FX strips — closing
+the window never cuts your microphone. The tray icon changes when the daemon
+stops answering, closing the window minimises to the tray, and "Quit" leaves the
+daemon running.
+
+Run it directly:
+
+```bash
+python3 tools/douze-app.py
+```
+
+It needs PyGObject plus GTK 3, WebKit2GTK 4.1 and (optionally)
+libayatana-appindicator for the tray icon — without the last one it still runs,
+window only.
+
+```bash
+# Debian/Ubuntu
+sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1 gir1.2-ayatanaappindicator3-0.1
+# Fedora
+sudo dnf install python3-gobject gtk3 webkit2gtk4.1 libayatana-appindicator-gtk3
+# Arch
+sudo pacman -S python-gobject gtk3 webkit2gtk-4.1 libayatana-appindicator
+```
+
+**With Nix**, there's a packaged build and a desktop launcher:
+
+```bash
+tools/install-douze-app.sh
+```
+
+That builds `.#douze-app`, installs the icons into your icon theme and writes a
+`douze.desktop` entry. It does **not** copy the code: the launcher runs
+`tools/douze-app.py` from the checkout, so editing it takes effect without
+rebuilding — only a dependency change needs one.
+
+> If you launch it from a Nix devShell, clear the environment first:
+> `env -u LD_LIBRARY_PATH -u PYTHONPATH -u GI_TYPELIB_PATH python3 tools/douze-app.py`.
+> Inherited library paths from a different nixpkgs make it die on importing
+> Pango. The generated `.desktop` entry already does this.
 
 ## Douze FX (plugin host)
 

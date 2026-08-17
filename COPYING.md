@@ -1,5 +1,12 @@
 # Licensing
 
+> **Not affiliated with Solid State Logic.** "Solid State Logic", "SSL",
+> "SSL 12" and "SSL 360" are trademarks of their respective owners, used here
+> only to identify the hardware this software works with. This repository
+> contains no code, firmware or asset belonging to Solid State Logic — see the
+> [README](README.md#trademarks-and-disclaimer). The licences below cover only
+> the work in this repository.
+
 This repository holds two different kinds of work, under two licences.
 
 ## Code — AGPL-3.0-or-later

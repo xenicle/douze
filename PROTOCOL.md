@@ -7,6 +7,12 @@
 >
 > *Public domain (CC0 1.0). This documents facts about a device: reuse it freely,
 > no attribution required. The repository's code is AGPLv3.*
+>
+> Projet **sans aucun lien avec Solid State Logic**. Ces notes décrivent ce qui a
+> été OBSERVÉ sur le bus USB entre l'application du fabricant et une carte
+> possédée par l'auteur ; elles ne contiennent ni code ni firmware du fabricant,
+> et rien n'a été décompilé. « SSL » et « SSL 12 » appartiennent à leurs
+> propriétaires.
 
 État : **protocole exploité en production.** `tools/sslctl.py` et le démon
 `tools/douze.py` pilotent réellement la carte — mixette, sends, monitoring,

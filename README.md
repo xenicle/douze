@@ -392,6 +392,33 @@ per 30 s, audio included) — keep only the filtered `.ctl.pcapng`.
 
 ---
 
+## Trademarks and disclaimer
+
+**This project is not affiliated with, endorsed by, sponsored by or connected to
+Solid State Logic in any way.**
+
+"Solid State Logic", "SSL", "SSL 12" and "SSL 360" are trademarks of their
+respective owners. They are used here only to identify the hardware this
+software works with — there is no other way to say which device a driver drives.
+No claim is made to those marks.
+
+This project contains **no code, firmware, driver or asset belonging to Solid
+State Logic**. Nothing was decompiled. The protocol was determined by observing
+USB traffic between the manufacturer's own application and hardware the author
+owns, and by writing down what was observed — the same method used for every
+other unsupported audio interface on Linux.
+
+It talks to firmware for which no documentation exists. **Use at your own risk.**
+The card is not known to have been damaged by any of this, and the tools only
+replay message shapes seen in captures, but there is no warranty of any kind
+(see sections 15 to 17 of the [licence](LICENSE)). If you experiment, read
+[CONTRIBUTING.md](CONTRIBUTING.md) first: never send invented frames to the
+device.
+
+If you are with Solid State Logic and something here concerns you, please open
+an issue — this exists because your customers want to use your hardware on
+Linux, and would rather do it with your blessing than without it.
+
 ## License
 
 Two licences, on purpose — see [COPYING.md](COPYING.md).

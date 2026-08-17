@@ -14,6 +14,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -718,6 +719,37 @@ def main():
     FX.autostart(lambda sid: fx_cmd({"cmd": "start", "id": sid}).get("msg"))
     threading.Thread(target=fx_broadcast_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+
+    # ARRÊT PROPRE sur SIGTERM, c'est-à-dire sur `systemctl restart`.
+    #
+    # Sans ça, systemd envoyait SIGTERM à tout le cgroup — dont les moteurs de
+    # bandes, qui peuvent BLOQUER plus de 30 s sur le teardown d'un plugin Wine.
+    # Le cgroup ne se vidait pas, systemd attendait son TimeoutStopSec entier,
+    # puis tuait de force. Vu de l'utilisateur : il clique « redémarrer » et le
+    # démon « ne revient jamais » — il revenait après une minute et demie.
+    #
+    # On demande donc leur arrêt aux bandes NOUS-MÊMES : `/quit` déclenche leur
+    # propre garde-fou de sortie (8 s puis `_Exit`), qui sait justement se
+    # dépêtrer d'un plugin Wine récalcitrant.
+    def arret(signum, _frame):
+        print(f"signal {signum} : arrêt des bandes avant de rendre la main…",
+              flush=True)
+        try:
+            FX.stop_all()
+        except Exception as e:
+            print(f"  arrêt des bandes : {e}", flush=True)
+        # ⚠️ `shutdown()` DOIT être appelé depuis un AUTRE fil que celui qui
+        # exécute `serve_forever()` — sinon il attend une boucle qui ne peut plus
+        # tourner. Or un gestionnaire de signal s'exécute dans le fil PRINCIPAL,
+        # c'est-à-dire précisément celui-là. L'appeler directement fige le
+        # process (constaté : SIGKILL de systemd 20 s plus tard, et un
+        # redémarrage qui a l'air de ne jamais revenir — la panne même qu'on
+        # cherchait à corriger).
+        threading.Thread(target=srv.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, arret)
+    signal.signal(signal.SIGINT, arret)
+
     print(f"Douze prêt → http://localhost:{PORT}  (Ctrl-C pour arrêter)")
     try:
         srv.serve_forever()

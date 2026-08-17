@@ -28,6 +28,15 @@ WorkingDirectory=%h/douze
 # (« Command python3 is not executable »). `/usr/bin/env` est le
 # chemin absolu portable qui retrouve le bon python.
 ExecStart=/usr/bin/env python3 tools/douze.py
+# Le démon arrête ses bandes lui-même sur SIGTERM, mais un moteur peut traîner
+# sur un teardown Wine. 20 s suffisent largement à son garde-fou interne (8 s) —
+# au-delà, mieux vaut un SIGKILL rapide qu'un « redémarrage » qui a l'air figé.
+# SIGTERM au démon SEUL, puis SIGKILL immédiat du reste dès qu'il a rendu la
+# main. Sans ça, systemd attend aussi les `winedevice.exe` que yabridge laisse
+# derrière lui — ils ne s'arrêtent jamais poliment, et on payait le délai entier
+# à chaque redémarrage.
+KillMode=mixed
+TimeoutStopSec=20
 Restart=on-failure
 RestartSec=10
 

@@ -383,6 +383,28 @@ Symptoms: strip dies with `code -6`, `terminate called without an active
 exception` in the strip log, or *"The Wine host process has exited
 unexpectedly"*.
 
+### Only the Windows plugins fail, with *"Unable to load VST-3 plug-in file"*
+
+Different problem, on NixOS. A `.vst3` installed by `yabridgectl sync` holds no
+yabridge code: only a *chainloader*, which looks the real
+`libyabridge-vst3.so` up at run time in the directories listed by
+`$NIX_PROFILES`. When that variable is missing, every bridged plugin fails with
+the message JUCE also uses for a corrupt file — while native plugins keep
+loading, so nothing points at the environment.
+
+A user service does not necessarily have the variable: `systemd --user` only
+receives it when the desktop session imports it, which can happen *after*
+`douze.service` has started at boot. Douze now rebuilds `NIX_PROFILES` itself
+when it does not lead to yabridge — for the strips and for the plugin scanner
+alike — and says so in the journal:
+
+```
+[fx] NIX_PROFILES ne menait pas à yabridge : ajout de /run/current-system/sw
+```
+
+Plugins scanned while the variable was missing were recorded as broken: rescan
+them once it is fixed.
+
 ### Meters do not move, although audio is flowing
 
 The engine resets its peaks on every read — reading is consuming. The daemon

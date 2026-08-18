@@ -91,6 +91,29 @@ syslib="/run/current-system/sw/share/nix-ld/lib"
 export LD_LIBRARY_PATH="$jacklib${LD_LIBRARY_PATH:+}"
 [[ -d "$syslib" ]] && export LD_LIBRARY_PATH="$jacklib:$syslib"
 
+# --- 2 bis. yabridge : NIX_PROFILES doit mener à la vraie bibliothèque -------
+# Un .vst3 posé par `yabridgectl sync` ne contient qu'un CHAINLOADER ; il va
+# chercher `libyabridge-vst3.so` à l'exécution dans les répertoires de
+# $NIX_PROFILES (patch NixOS). Variable absente = « Could not find
+# 'libyabridge-vst3.so' », que JUCE rapporte en « Unable to load VST-3 plug-in
+# file » : le message d'un plugin cassé, et seuls les plugins WINDOWS tombent —
+# les natifs continuent de charger, donc rien ne désigne l'environnement.
+# Un service systemd (ou un `nix develop`) n'a pas forcément la variable.
+yablib="lib/libyabridge-vst3.so"
+yabok=0
+for p in ${NIX_PROFILES:-}; do
+  [[ -e "$p/$yablib" ]] && { yabok=1; break; }
+done
+if [[ $yabok -eq 0 ]]; then
+  for p in /run/current-system/sw "/etc/profiles/per-user/${USER:-$(id -un)}" \
+           "$HOME/.nix-profile" /nix/var/nix/profiles/default; do
+    if [[ -e "$p/$yablib" ]]; then
+      export NIX_PROFILES="${NIX_PROFILES:+$NIX_PROFILES }$p"
+      echo "[run] NIX_PROFILES ne menait pas à yabridge : ajout de $p"
+    fi
+  done
+fi
+
 # --- 3. nom du nœud dans le graphe -----------------------------------------
 # Le nom du client JACK est figé à la COMPILATION dans JUCE
 # (JUCE_JACK_CLIENT_NAME) → pour nommer chaque bande, on surcharge le nœud à

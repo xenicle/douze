@@ -53,6 +53,47 @@ PW_LINK = shutil.which("pw-link") or "/run/current-system/sw/bin/pw-link"
 # Une chaîne yabridge/Wine peut mettre 30 s à s'instancier : on attend large.
 START_TIMEOUT = 90.0
 
+# ----------------------------------------------------- yabridge / NIX_PROFILES
+#
+# Les .vst3 posés par `yabridgectl sync` ne CONTIENNENT pas yabridge : juste un
+# « chainloader » de 100 ko qui va chercher la vraie `libyabridge-vst3.so` à
+# l'exécution. Sur NixOS il la cherche dans les répertoires listés par
+# $NIX_PROFILES. Variable absente = « Could not find 'libyabridge-vst3.so' », que
+# JUCE rapporte en « Unable to load VST-3 plug-in file » — exactement le message
+# d'un plugin cassé, et SEULS les plugins Windows tombent (les natifs comme
+# RNNoise chargent toujours), ce qui égare complètement le diagnostic.
+#
+# Or rien ne garantit la variable au démon : systemd --user ne l'a que si la
+# session de bureau la lui a importée — et douze.service peut démarrer AVANT —,
+# et `nix develop` ne la restitue pas. On la reconstruit donc ici, une fois, pour
+# tout ce que ce module lance : les bandes ET le scanner (sinon un scan marque
+# tous les plugins Windows comme cassés et pollue durablement le catalogue).
+PROFILS_NIX = ("/run/current-system/sw",
+               "/etc/profiles/per-user/" + (os.environ.get("USER") or ""),
+               os.path.expanduser("~/.nix-profile"),
+               "/nix/var/nix/profiles/default")
+YABRIDGE_LIB = "lib/libyabridge-vst3.so"
+
+
+def _reparer_nix_profiles():
+    """Complète $NIX_PROFILES si yabridge n'y est pas trouvable. -> ce qu'on a ajouté."""
+    for p in os.environ.get("NIX_PROFILES", "").split():
+        if os.path.exists(os.path.join(p, YABRIDGE_LIB)):
+            return ""                         # déjà bon : on ne touche à rien
+    trouves = [p for p in PROFILS_NIX
+               if p and os.path.exists(os.path.join(p, YABRIDGE_LIB))]
+    if not trouves:
+        return ""                             # pas de yabridge : rien à réparer
+    os.environ["NIX_PROFILES"] = " ".join(dict.fromkeys(
+        os.environ.get("NIX_PROFILES", "").split() + trouves))
+    return " ".join(trouves)
+
+
+_NIX_PROFILES_REPARE = _reparer_nix_profiles()
+if _NIX_PROFILES_REPARE:
+    print("[fx] NIX_PROFILES ne menait pas à yabridge : ajout de "
+          + _NIX_PROFILES_REPARE, flush=True)
+
 # ---------------------------------------------------------------------- scan
 #
 # Le catalogue de plugins est un fichier XML (`KnownPluginList` de JUCE) que le

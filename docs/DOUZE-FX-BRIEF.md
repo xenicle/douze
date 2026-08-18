@@ -499,7 +499,7 @@ Fait depuis :
   présence d'auditeurs. Supprime la multiplication par page des sollicitations du
   verrou du rack.
 - **Tests** ✅ — `fx/tools/run_tests.sh` : 34 vérifications moteur (hors device) +
-  31 côté superviseur/scan. Le harnais a été validé en cassant volontairement une
+  62 côté superviseur/scan. Le harnais a été validé en cassant volontairement une
   attente (il sortait en 0 : `|| true` après un pipe réinitialise PIPESTATUS).
 - **Détails** ✅ — bypass par étage visible et sauvegardé, vumètre par étage,
   `prev_mute` persisté, `PROTOCOL.md` remis à jour.

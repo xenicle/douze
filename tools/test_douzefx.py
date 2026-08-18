@@ -358,6 +358,134 @@ def test_bande_figee(tmp):
             "process mort : arrêtée, pas figée")
 
 
+class FauxProc:
+    """Un process dont on décide la mort. `poll()` : None = vivant."""
+
+    def __init__(self, code=None):
+        self.code = code
+
+    def poll(self):
+        return self.code
+
+    @property
+    def returncode(self):
+        return self.code
+
+    def terminate(self):
+        self.code = -15
+
+    def kill(self):
+        self.code = -9
+
+    def wait(self, timeout=None):
+        return self.code
+
+
+def test_veille_pipewire(tmp):
+    print("[test] veille : une bande dont le SON meurt sans que le process meure")
+    import time
+
+    import douzefx
+
+    douzefx.LOG_DIR = tmp
+    cfg = {"id": "v", "name": "V", "rack": "",
+           "source": {}, "dest": {"kind": "virtualmic", "name": "V"}}
+
+    def bande():
+        s = douzefx.Strip(cfg, 96)
+        s.proc = FauxProc()                     # lancée par NOUS (sinon pas surveillée)
+        s.vnodes = {"mic": FauxProc()}
+        s._stop_virtual_nodes = lambda: None    # pas de pkill dans un test
+        s._pipewire_pret = lambda: True
+        s.api = lambda *a, **k: None
+        s.demarrages = []
+        def start():
+            s.demarrages.append(1)
+            s.proc = FauxProc()
+            s.vnodes = {"mic": FauxProc()}
+            return True, "démarrée"
+        s.start = start
+        return s
+
+    # 1) Tout va bien : la veille ne doit RIEN faire. Une veille qui relance à
+    #    tort est pire que pas de veille.
+    s = bande()
+    s.audio_vu = True
+    s.sante_t = time.time()
+    verifie(s.supervise() is None and not s.demarrages,
+            "bande saine : ni relance ni message")
+
+    # 2) LA PANNE DU 18/08 : PipeWire redémarre, le `pw-cli` qui tenait le nœud
+    #    meurt, le nœud disparaît — et le moteur, lui, reste vivant. Rien ne le
+    #    voyait : la bande se disait « en marche », Discord n'avait plus de micro.
+    s = bande()
+    s.audio_vu = True
+    s.sante_t = time.time()
+    s.vnodes["mic"].code = 0                    # le pw-cli est mort (zombie récolté)
+    msg = s.supervise()
+    verifie(len(s.demarrages) == 1, "nœud virtuel disparu : la bande est relancée")
+    verifie("nœud virtuel" in (msg or ""), f"et la raison est nommée : {msg!r}")
+    verifie(s.snapshot().get("notice", "").startswith("relancée"),
+            "la GUI reçoit un avis (une relance silencieuse ne s'explique pas)")
+
+    # 3) Le serveur n'est pas encore revenu : on ne tente RIEN. Sans ce garde-fou,
+    #    les trois relances du budget se consommaient pendant les deux secondes où
+    #    PipeWire redémarre, et la bande était condamnée pour une panne déjà finie.
+    s = bande()
+    s.audio_vu = True
+    s.sante_t = time.time()
+    s.vnodes["mic"].code = 0
+    s._pipewire_pret = lambda: False
+    verifie(s.supervise() is None and not s.demarrages,
+            "PipeWire absent : aucune tentative")
+    verifie(not s.restarts, "et le budget de relances est intact (on repassera)")
+
+    # 4) L'autre bout de la MÊME panne : pas de nœud virtuel (SSL → SSL), donc
+    #    rien ne disparaît — mais le client audio du moteur est mort et
+    #    `sampleRate` retombe à 0. Seul symptôme disponible.
+    s = bande()
+    s.vnodes = {}
+    s.api = lambda *a, **k: {"stages": [], "sampleRate": 0.0}
+    s.audio_vu = True                            # on l'a VUE jouer
+    s.audio_ko_t = time.time() - 30              # muette depuis 30 s
+    msg = s.supervise()
+    verifie(len(s.demarrages) == 1, "plus de client audio : la bande est relancée")
+    verifie("client audio" in (msg or ""), f"et la raison est nommée : {msg!r}")
+
+    # 5) Une bande qui DÉMARRE annonce elle aussi sampleRate 0. La relancer
+    #    l'empêcherait de jamais finir de démarrer.
+    s = bande()
+    s.vnodes = {}
+    s.api = lambda *a, **k: {"stages": [], "sampleRate": 0.0}
+    verifie(s.supervise() is None and not s.demarrages,
+            "jamais vue jouer : c'est un démarrage, pas une panne")
+
+    # 6) Budget : une panne qui revient sans cesse doit finir par s'arrêter et le
+    #    DIRE, plutôt que de relancer la bande indéfiniment.
+    s = bande()
+    s.audio_vu = True
+    s.sante_t = time.time()
+    for _ in range(douzefx.Strip.RESTART_MAX + 1):
+        s.sante_t = time.time()
+        s.vnodes["mic"].code = 0
+        dernier = s.supervise()
+    verifie(len(s.demarrages) == douzefx.Strip.RESTART_MAX,
+            f"au plus {douzefx.Strip.RESTART_MAX} relances dans la fenêtre")
+    verifie("arrêtée après" in (dernier or ""), f"puis on renonce en le disant : {dernier!r}")
+    verifie(s.snapshot().get("problem") == s.give_up,
+            "et la GUI l'affiche comme un problème, pas comme un avis")
+
+    # 7) Un arrêt VOULU efface l'ardoise ; une fermeture interne à la relance,
+    #    non — sinon le budget se remettrait à zéro à chaque tour et ne
+    #    plafonnerait jamais rien.
+    s = bande()
+    s.restarts = [time.time()]
+    s._teardown = lambda: None
+    s.stop()
+    verifie(s.restarts == [] and s.give_up is None,
+            "arrêt manuel : budget et renoncement remis à zéro")
+
+
 def test_readoption():
     print("[test] réadoption des applications sur un nœud recréé")
     import douzefx
@@ -527,6 +655,20 @@ def test_enumeration_plugins():
 
 
 def main():
+    import douzefx
+
+    # ⚠️ LES PORTS D'ABORD, avant le moindre `Strip`.
+    #
+    # Les bandes de test s'appellent « a » et « b », donc index 0 et 1, donc
+    # ports 1213 et 1214 — CEUX DES VRAIES BANDES. Et `Strip.alive()` se replie
+    # sur « quelqu'un répond-il sur mon port ? » pour ré-adopter une bande
+    # survivante : lancée pendant que Douze tourne, la batterie prenait le micro
+    # de l'utilisateur pour sa propre bande de test, lui envoyait /quit, et le
+    # relançait sous le nom « A » — micro coupé, nœud fantôme dans le graphe.
+    # Une batterie de tests dont la promesse est « ne touche à rien » doit tenir
+    # cette promesse même quand tout tourne.
+    douzefx.PORT_BASE = 1400
+
     with tempfile.TemporaryDirectory() as tmp:
         test_slug()
         test_nom_depuis_chemin()
@@ -535,6 +677,7 @@ def main():
         test_config_bandes(tmp)
         test_vue_partagee(tmp)
         test_bande_figee(tmp)
+        test_veille_pipewire(tmp)
         test_profils(tmp)
         test_readoption()
         test_scan_amorcage(tmp)

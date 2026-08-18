@@ -844,6 +844,19 @@ class Strip:
         # présentent pareil de l'extérieur (process vivant, API muette), et les
         # confondre affichait « démarre… » indéfiniment sur une bande figée.
         self.a_repondu = False
+        # Santé du chemin audio, indépendante de la vie du process (cf. `sante`).
+        self.sante_t = 0.0        # dernier /state pris en compte
+        self.audio_vu = False     # a-t-on VU cette bande jouer depuis ce démarrage ?
+        self.audio_ko_t = 0.0     # depuis quand elle ne joue plus (0 = elle joue)
+        # Avis TRANSITOIRE (« je me suis relancée toute seule, voilà pourquoi »).
+        # La GUI ne savait afficher que les échecs : une bande rétablie sans un
+        # mot laissait croire qu'il ne s'était rien passé, et la cause — un
+        # redémarrage de PipeWire — restait invisible.
+        self.avis = None
+        self.avis_t = 0.0
+
+    def _note(self, msg):
+        self.avis, self.avis_t = msg, time.time()
 
     # ------------------------------------------- mémoire de l'écoute directe
     def _prev_mute_path(self):
@@ -987,6 +1000,34 @@ class Strip:
             time.sleep(0.2)
         return False
 
+    def _vnode_perdu(self):
+        """Un de nos nœuds virtuels s'est-il évaporé ? Renvoie son rôle, ou None.
+
+        Le nœud n'existe que tant que vit son `pw-cli -m create-node`. Un
+        REDÉMARRAGE DE PIPEWIRE tue ce process (« connection error », relais
+        brisé) : le nœud disparaît, le process passe zombie — et rien ne le
+        remarquait. Le moteur, lui, survit et se déclare « en marche » ; vu de
+        Discord, le micro et la destination avaient purement et simplement
+        disparu (vécu le 18/08/2026, PipeWire relancé à 21:41).
+
+        `poll()` fait d'une pierre deux coups : il constate la mort ET récolte
+        le zombie."""
+        for role, proc in self.vnodes.items():
+            if proc.poll() is not None:
+                return role
+        return None
+
+    def _pipewire_pret(self):
+        """PipeWire répond-il ? Juste après son redémarrage il y a une fenêtre
+        où TOUT échoue. Y brûler le budget de relances condamnerait la bande
+        pour une panne déjà finie : on préfère repasser dans 3 s."""
+        try:
+            r = subprocess.run([PW_CLI, "info", "0"], capture_output=True,
+                               timeout=5)
+            return r.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
     def _stop_virtual_nodes(self):
         for role, proc in list(self.vnodes.items()):
             proc.terminate()
@@ -1004,6 +1045,44 @@ class Strip:
         for prefixe in ("douze_fx_", "douze_fx_in_"):
             subprocess.run(["pkill", "-f", f"node.name={prefixe}{_slug(self.id)} "],
                            capture_output=True)
+
+    # --------------------------------------------------------------- santé audio
+    #
+    # Un moteur peut perdre son CLIENT AUDIO sans mourir : au redémarrage de
+    # PipeWire, le process reste là, son API répond encore, mais son
+    # périphérique JACK ne tourne plus — `sampleRate` retombe à 0 et plus un
+    # échantillon ne passe. La bande s'affichait « en marche », et elle était
+    # muette. C'est la même panne que `_vnode_perdu`, vue de l'autre bout : une
+    # bande sans nœud virtuel (SSL → SSL) n'a que ce symptôme-là.
+    SANTE_PERIODE = 15.0     # au plus une lecture /state par bande et par 15 s
+    SANTE_GRACE = 8.0        # muette 8 s d'affilée = vraiment tombée
+
+    def sante(self, live):
+        """Prend en compte un /state DÉJÀ LU. Appelé par `snapshot`, qui en lit
+        un de toute façon : lire /state consomme les crêtes du moteur, donc on
+        ne s'en offre pas un deuxième quand la GUI en tire un toutes les 400 ms."""
+        if live is None:
+            return
+        self.a_repondu = True
+        if "sampleRate" not in live:      # moteur sans périphérique déclaré
+            return
+        self.sante_t = time.time()
+        if (live.get("sampleRate") or 0) > 0:
+            self.audio_vu = True
+            self.audio_ko_t = 0.0
+        elif self.audio_vu and not self.audio_ko_t:
+            self.audio_ko_t = self.sante_t
+
+    def _audio_mort(self):
+        # Sans GUI ouverte, personne n'appelle `sante` : on va chercher l'état
+        # nous-mêmes, mais rarement — une crête volée toutes les 15 s ne se voit
+        # pas, une toutes les 3 s se verrait.
+        if time.time() - self.sante_t > self.SANTE_PERIODE:
+            self.sante(self.api("/state", timeout=2))
+        # `audio_vu` est le garde-fou : tant qu'on ne l'a pas vue JOUER depuis ce
+        # démarrage, un sampleRate à 0 veut seulement dire « elle démarre ».
+        return bool(self.audio_vu and self.audio_ko_t
+                    and time.time() - self.audio_ko_t >= self.SANTE_GRACE)
 
     # -------------------------------------------------------------- cycle de vie
     def start(self):
@@ -1067,6 +1146,8 @@ class Strip:
         self.proc = subprocess.Popen(args, env=env, stdout=log, stderr=log,
                                      stdin=subprocess.DEVNULL)
         self.a_repondu = False          # nouveau process : elle DÉMARRE, elle ne gèle pas
+        self.sante_t = self.audio_ko_t = 0.0
+        self.audio_vu = False
 
         deadline = time.time() + START_TIMEOUT
         while time.time() < deadline:
@@ -1081,6 +1162,17 @@ class Strip:
         return False, "pas de réponse de la bande"
 
     def stop(self):
+        self._teardown()
+        self.restarts = []              # arrêt VOULU : on repart d'une ardoise nette
+        self.give_up = None
+        return True, "arrêtée"
+
+    def _teardown(self):
+        """Ferme le moteur et ses nœuds SANS toucher au budget de relances.
+
+        Séparé de `stop()` parce qu'une relance automatique doit fermer la bande
+        sans s'absoudre : remettre le compteur à zéro à chaque tour ferait boucler
+        indéfiniment une bande qui retombe aussitôt."""
         # /quit d'abord : la bande se ferme proprement (elle a son propre
         # garde-fou de sortie si un plugin Wine bloque le teardown).
         self.api("/quit", body={}, timeout=5)
@@ -1102,43 +1194,72 @@ class Strip:
 
         self.proc = None
         self._stop_virtual_nodes()
-        self.restarts = []              # arrêt VOULU : on repart d'une ardoise nette
-        self.give_up = None
-        return True, "arrêtée"
 
     # ------------------------------------------------------------------ watchdog
     RESTART_WINDOW = 120.0              # secondes
     RESTART_MAX = 3                     # au-delà, on renonce et on le dit
+    AVIS_TTL = 180.0                    # durée d'affichage d'un avis de relance
 
     def supervise(self):
-        """Relance la bande si SON process est mort sans qu'on l'ait demandé.
+        """Relance la bande si elle est tombée sans qu'on l'ait demandé.
 
-        Le moteur se suicide (code 70) quand son thread de contrôle est figé par
-        un plugin Wine — typiquement l'ouverture d'un éditeur Waves. Sans cette
-        relance, l'utilisateur se retrouvait avec une bande vivante mais sourde à
-        l'API : la GUI n'affichait plus ni les vrais noms ni les niveaux, et rien
-        ne repartait tout seul. On ne surveille QUE les bandes qu'on a lancées
-        (`proc` non nul) : une bande ré-adoptée n'a pas de handle, et une bande
-        arrêtée à la main doit rester arrêtée."""
-        if self.proc is None or self.proc.poll() is None:
+        TROIS morts possibles, et une seule était surveillée :
+
+        (1) SON PROCESS meurt. Le moteur se suicide (code 70) quand son thread de
+            contrôle est figé par un plugin Wine — typiquement l'ouverture d'un
+            éditeur Waves. Sans cette relance, l'utilisateur se retrouvait avec
+            une bande vivante mais sourde à l'API : la GUI n'affichait plus ni les
+            vrais noms ni les niveaux, et rien ne repartait tout seul.
+
+        (2) SES NŒUDS VIRTUELS s'évaporent, le process survivant (`_vnode_perdu`).
+
+        (3) SON CLIENT AUDIO meurt, le process ET les nœuds survivant
+            (`_audio_mort`) — le cas des bandes sans nœud virtuel.
+
+        (2) et (3) sont la même panne, vue des deux bouts : un redémarrage de
+        PipeWire. Aucune des deux ne se voyait — la bande se déclarait « en
+        marche » pendant que le son ne passait plus nulle part.
+
+        On ne surveille QUE les bandes qu'on a lancées (`proc` non nul) : une
+        bande ré-adoptée n'a pas de handle, et une bande arrêtée à la main doit
+        rester arrêtée."""
+        if self.proc is None:
             return None
 
-        code = self.proc.returncode
-        self.proc = None
-        self._stop_virtual_nodes()        # le nœud du micro virtuel doit repartir avec
+        if self.proc.poll() is None:
+            # Le process vit : reste à savoir si le SON vit avec lui.
+            perdu = self._vnode_perdu()
+            if perdu is None and not self._audio_mort():
+                return None
+            # Panne d'origine EXTERNE : inutile d'attaquer tant que le serveur
+            # n'est pas revenu, et surtout pas d'y laisser le budget de relances.
+            if not self._pipewire_pret():
+                return None
+            pourquoi = ("nœud virtuel disparu" if perdu else "plus de client audio")
+            pourquoi += " (PipeWire a redémarré ?)"
+            # Fermer AVANT de recréer les nœuds : le moteur resterait sinon
+            # accroché à des fantômes, et deux nœuds du même nom coexisteraient.
+            self._teardown()
+        else:
+            code = self.proc.returncode
+            self.proc = None
+            self._stop_virtual_nodes()    # le nœud du micro virtuel doit repartir avec
+            pourquoi = ("thread de contrôle figé" if code == 70 else f"code {code}")
 
         now = time.time()
         self.restarts = [t for t in self.restarts if now - t < self.RESTART_WINDOW]
 
         if len(self.restarts) >= self.RESTART_MAX:
             self.give_up = (f"arrêtée après {len(self.restarts)} relances "
-                            f"(code {code}) — voir {self.id}.log")
+                            f"({pourquoi}) — voir {self.id}.log")
             return self.give_up
 
         self.restarts.append(now)
-        why = "thread de contrôle figé" if code == 70 else f"code {code}"
         ok, msg = self.start()
-        return f"relancée ({why}) : {msg}" if ok else f"relance échouée ({why}) : {msg}"
+        if ok:
+            self._note(f"relancée : {pourquoi}")
+            return f"relancée ({pourquoi}) : {msg}"
+        return f"relance échouée ({pourquoi}) : {msg}"
 
     # ------------------------------------------ chaîne (marche ET arrêt)
     #
@@ -1239,11 +1360,15 @@ class Strip:
         }
         if self.give_up:
             out["problem"] = self.give_up
+        # Avis transitoire : la GUI doit pouvoir dire « ça s'est réparé tout
+        # seul, et voici pourquoi », pas seulement « ça va » ou « c'est cassé ».
+        elif self.avis and time.time() - self.avis_t < self.AVIS_TTL:
+            out["notice"] = self.avis
 
         if self.alive():
             live = self.api("/state", timeout=3)
+            self.sante(live)              # gratuit : ce /state est déjà payé
             if live is not None:
-                self.a_repondu = True
                 out["live"] = live
                 out["chain"] = live.get("stages", [])
                 # Le moteur se DÉCLARE figé. C'est le cas le plus courant, et

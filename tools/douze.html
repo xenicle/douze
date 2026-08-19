@@ -485,6 +485,8 @@ const I18N = {
        fxsortby: "Trier", fxsortaz: "A→Z", fxsortbrand: "Marque", fxsorttype: "Type",
        fxnobrand: "sans marque", fxnotype: "sans type",
        fxguihang: "L'UI de ce plugin a déjà bloqué la bande — clic = réessayer",
+       fxrawcap: "%s capte aussi l'entrée brute",
+       fxrawcaptitle: "Ce flux ne traverse aucun plugin : cette application entend le son NON TRAITÉ. Choisis le micro de la bande dans ses réglages.",
        fxguiretry: "Cet éditeur a déjà figé la bande une fois.\n\nSi c'était un accident (démon démarré sans affichage), réessayer ne coûte rien. Sinon la bande peut se relancer et couper le son quelques secondes.\n\nOn réessaie ?",
        fxasked: "%s demandé", fxparams: "Paramètres", fxretry: "Réessayer",
        fxnew: "＋ Nouvelle bande", fxnewtitle: "Nouvelle bande", fxnname: "Nom",
@@ -536,6 +538,8 @@ const I18N = {
        fxsortby: "Sort", fxsortaz: "A→Z", fxsortbrand: "Brand", fxsorttype: "Type",
        fxnobrand: "no brand", fxnotype: "no type",
        fxguihang: "This plug-in's UI froze the strip before — click to try again",
+       fxrawcap: "%s is also capturing the raw input",
+       fxrawcaptitle: "That stream goes through no plug-in: this app hears the UNPROCESSED sound. Pick the strip's microphone in its settings.",
        fxguiretry: "This editor froze the strip once.\n\nIf that was an accident (daemon started with no display), retrying costs nothing. Otherwise the strip may restart and drop audio for a few seconds.\n\nTry again?",
        fxasked: "%s requested", fxparams: "Parameters", fxretry: "Retry",
        fxnew: "＋ New strip", fxnewtitle: "New strip", fxnname: "Name",
@@ -1096,6 +1100,15 @@ function fxRender() {
       // de rattraper ressemblait à une bande qui n'avait jamais bronché.
       (s.notice && !s.problem
         ? `<span class="pill amber">${esc(s.notice)}</span>` : "") +
+      // Une application qui capte l'entrée MATÉRIELLE court-circuite la bande :
+      // son flux ne traverse aucun plugin. Vécu le 19/08/2026 — Discord avait un
+      // deuxième flux de capture, sans cible, posé sur la carte brute ; les
+      // interlocuteurs entendaient le micro non traité et régler les plugins ne
+      // changeait rien, puisqu'ils n'étaient pas sur le chemin. Rien ne le
+      // disait nulle part : la bande allait bien, l'application aussi.
+      ((s.raw_capture || []).length
+        ? `<span class="pill amber" title="${T("fxrawcaptitle")}">${
+             esc(T("fxrawcap").replace("%s", s.raw_capture.join(", ")))}</span>` : "") +
       `<div class="acts"></div>`;
     const acts = top.querySelector(".acts");
 
@@ -1364,6 +1377,7 @@ function fxApply(d) {
     FXSTRIPS = d.strips || [];
     const sig = JSON.stringify(FXSTRIPS.map(s =>
       [s.id, s.name, s.running, s.ready, !!s.frozen, s.problem || "", s.notice || "",
+       (s.raw_capture || []).join("|"),
        !!s.autostart,
        (s.chain || []).map(c => [c.name, c.error || "", c.bypass, !!c.editor_hangs])]));
 

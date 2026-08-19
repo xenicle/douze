@@ -436,6 +436,33 @@ And the verdict is no longer final: the ▣ button of a blacklisted plug-in show
 `▣!` and asks whether to try again. If it hangs for real, the watchdog restarts
 the strip and it goes back on the list — where it belongs.
 
+### Others hear the *unprocessed* microphone, and tweaking the plug-ins changes nothing
+
+Look for an amber pill on the strip: *"<app> is also capturing the raw input"*.
+
+A capture stream that names no device follows the **system default source**. If
+that default is the sound card itself, the app records the raw microphone —
+around the strip, through no plug-in at all. Nothing reports it: the strip is
+healthy, the app is healthy, and the two capture paths coexist. Discord is a
+frequent case, because it opens more than one capture stream and only one of
+them carries an explicit target.
+
+Two fixes, and you want both:
+
+```bash
+wpctl status                 # find the strip's virtual mic
+wpctl set-default <its-id>   # make it the default source
+```
+
+and pick that same microphone explicitly in the application. The default covers
+every app that does not choose; the explicit choice survives the strip being
+stopped and restarted.
+
+Douze watches for this on its own — every 12 s it compares who else is wired to
+the hardware input a strip is processing, and names them in `/fx`
+(`raw_capture`) and in the GUI. It does not rewire them: a stream you pointed
+somewhere on purpose is yours to keep.
+
 ### Meters do not move, although audio is flowing
 
 The engine resets its peaks on every read — reading is consuming. The daemon

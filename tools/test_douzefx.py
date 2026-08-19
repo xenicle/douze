@@ -358,6 +358,62 @@ def test_bande_figee(tmp):
             "process mort : arrêtée, pas figée")
 
 
+def test_capteurs_paralleles():
+    """Une application qui capte l'entrée MATÉRIELLE court-circuite la bande.
+
+    Vécu le 19/08/2026 : Discord avait deux flux de capture, l'un sur le micro
+    traité, l'autre — sans cible, donc posé sur le périphérique par défaut —
+    directement sur les entrées brutes de la carte. Les interlocuteurs
+    entendaient le micro non traité, et régler les plugins ne changeait rien
+    puisque ce flux ne les traversait pas. Rien, nulle part, ne le disait.
+    """
+    print("[test] applications qui captent l'entrée brute en parallèle")
+    from douzefx import capteurs_paralleles
+
+    def noeud(i, nom, classe, appli=None):
+        p = {"node.name": nom, "media.class": classe}
+        if appli:
+            p["application.name"] = appli
+        return {"id": i, "type": "PipeWire:Interface:Node", "info": {"props": p}}
+
+    def lien(src, dst):
+        return {"id": 900 + src * 10 + dst, "type": "PipeWire:Interface:Link",
+                "info": {"output-node-id": src, "input-node-id": dst}}
+
+    carte = noeud(1, "alsa_input.ssl12", "Audio/Source")
+    moteur = noeud(2, "douze-fx.mic", "Stream/Input/Audio")
+    micvirt = noeud(3, "douze_fx_mic", "Audio/Source/Virtual")
+    propre = noeud(4, "vesktop", "Stream/Input/Audio", "vesktop")     # sur le traité
+    voleur = noeud(5, "vesktop", "Stream/Input/Audio", "vesktop")     # sur le brut
+    hp = noeud(6, "vesktop", "Stream/Output/Audio", "vesktop")        # lecture : hors sujet
+
+    base = [carte, moteur, micvirt, propre, voleur, hp,
+            lien(1, 2), lien(2, 3), lien(3, 4)]
+
+    verifie(capteurs_paralleles(base, "douze-fx.mic") == [],
+            "graphe sain : personne d'autre ne capte l'entrée matérielle")
+
+    avec = base + [lien(1, 5)]
+    verifie(capteurs_paralleles(avec, "douze-fx.mic") == ["vesktop"],
+            f"le deuxième flux est nommé : {capteurs_paralleles(avec, 'douze-fx.mic')}")
+
+    # Un flux de LECTURE branché sur la carte n'est pas une captation.
+    verifie(capteurs_paralleles(base + [lien(1, 6)], "douze-fx.mic") == [],
+            "un flux de lecture ne déclenche pas l'alerte")
+
+    # Une bande alimentée par son PROPRE puits virtuel : les applications qui y
+    # jouent sont ce qu'elle traite, pas des concurrentes.
+    puits = noeud(7, "douze_fx_in_retour", "Audio/Sink")
+    ret = noeud(8, "douze-fx.retour", "Stream/Input/Audio")
+    app = noeud(9, "vesktop", "Stream/Input/Audio", "vesktop")
+    verifie(capteurs_paralleles([puits, ret, app, lien(7, 8), lien(7, 9)],
+                                "douze-fx.retour") == [],
+            "une source non matérielle ne déclenche rien")
+
+    verifie(capteurs_paralleles(base, "douze-fx.absente") == [],
+            "bande arrêtée (absente du graphe) : rien à signaler")
+
+
 def test_refus_transmis(tmp):
     """Un moteur qui dit NON n'est pas un moteur absent.
 
@@ -727,6 +783,7 @@ def main():
         test_vue_partagee(tmp)
         test_bande_figee(tmp)
         test_veille_pipewire(tmp)
+        test_capteurs_paralleles()
         test_refus_transmis(tmp)
         test_profils(tmp)
         test_readoption()

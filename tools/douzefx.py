@@ -185,6 +185,55 @@ def _liens_indesirables(flux, cible_id, cle, autre):
     return restants
 
 
+def capteurs_paralleles(objs, node):
+    """Applications qui captent la MÊME entrée matérielle qu'une bande.
+
+    Le 19/08/2026, Discord avait DEUX flux de capture : l'un visait bien le micro
+    virtuel de la bande, l'autre — sans `target.object`, donc posé par PipeWire
+    sur le périphérique par défaut — lisait directement les entrées brutes de la
+    carte. Résultat : les interlocuteurs entendaient le micro NON TRAITÉ, sans
+    débruitage ni gate, et régler les plugins ne changeait rien à ce qu'ils
+    entendaient — puisque ce flux-là ne les traversait pas. Rien nulle part ne le
+    disait : la bande allait bien, l'application aussi.
+
+    On ne rebranche PAS (ce serait détourner un flux que l'utilisateur a pu
+    pointer là exprès, cf. `readopt_streams` qui ne touche qu'aux flux VISANT le
+    nœud virtuel) : on le dit, et on laisse décider.
+
+    Seules les sources MATÉRIELLES comptent. Une bande alimentée par son propre
+    puits virtuel a des applications branchées dessus par construction : c'est
+    exactement ce qu'elle est là pour traiter.
+    """
+    props = lambda o: (o.get("info") or {}).get("props") or {}
+    est = lambda o, quoi: str(o.get("type", "")).endswith(quoi)
+
+    moteur = next((o for o in objs if est(o, "Node")
+                   and props(o).get("node.name") == node), None)
+    if moteur is None:
+        return []                       # bande arrêtée : rien à signaler
+
+    noeuds = {o["id"]: props(o) for o in objs if est(o, "Node")}
+    liens = [(o.get("info") or {}) for o in objs if est(o, "Link")]
+
+    amont = {l.get("output-node-id") for l in liens
+             if l.get("input-node-id") == moteur["id"]}
+    sources = {n for n in amont
+               if (noeuds.get(n) or {}).get("media.class") == "Audio/Source"}
+
+    noms = set()
+    for l in liens:
+        if l.get("output-node-id") not in sources:
+            continue
+        cible = l.get("input-node-id")
+        if cible == moteur["id"]:
+            continue
+        p = noeuds.get(cible) or {}
+        if p.get("media.class") != "Stream/Input/Audio":
+            continue
+        noms.add(p.get("application.name") or p.get("node.name") or f"nœud {cible}")
+    return sorted(noms)
+
+
 def readopt_streams(slug, mic):
     """Rebranche les applications qui VISENT `slug` sans y être reliées.
 
@@ -848,6 +897,10 @@ class Strip:
         self.sante_t = 0.0        # dernier /state pris en compte
         self.audio_vu = False     # a-t-on VU cette bande jouer depuis ce démarrage ?
         self.audio_ko_t = 0.0     # depuis quand elle ne joue plus (0 = elle joue)
+        # Applications qui captent l'entrée MATÉRIELLE en parallèle de la bande
+        # (cf. `capteurs_paralleles`) : relevé par le superviseur, pas ici — une
+        # photo du graphe ne se prend pas au rythme d'affichage de la GUI.
+        self.capteurs = []
         # Avis TRANSITOIRE (« je me suis relancée toute seule, voilà pourquoi »).
         # La GUI ne savait afficher que les échecs : une bande rétablie sans un
         # mot laissait croire qu'il ne s'était rien passé, et la cause — un
@@ -1204,6 +1257,9 @@ class Strip:
 
         self.proc = None
         self._stop_virtual_nodes()
+        # Plus de bande, plus de comparaison possible : garder la
+        # dernière liste ferait vivre une alerte sur un graphe disparu.
+        self.capteurs = []
 
     # ------------------------------------------------------------------ watchdog
     RESTART_WINDOW = 120.0              # secondes
@@ -1375,6 +1431,12 @@ class Strip:
         elif self.avis and time.time() - self.avis_t < self.AVIS_TTL:
             out["notice"] = self.avis
 
+        # ÉTAT, pas événement : tant que l'application capte l'entrée brute, il
+        # faut que ça se voie — d'où un champ à part et pas un `notice`, qui
+        # s'efface tout seul au bout de trois minutes.
+        if self.capteurs:
+            out["raw_capture"] = self.capteurs
+
         if self.alive():
             live = self.api("/state", timeout=3)
             self.sante(live)              # gratuit : ce /state est déjà payé
@@ -1422,11 +1484,40 @@ class Supervisor:
         self.reload()
         threading.Thread(target=self._watch, daemon=True).start()
 
+    CAPTEURS_RONDES = 4           # un relevé du graphe toutes les 4 rondes (12 s)
+
+    def _relever_capteurs(self):
+        """Qui d'autre capte l'entrée matérielle des bandes ?
+
+        UNE seule photo du graphe pour toutes les bandes, et pas à chaque ronde :
+        `pw-dump` sérialise tout le graphe, ça n'a pas sa place dans une boucle de
+        3 s. Une application qui court-circuite une bande le fait pendant des
+        minutes, pas pendant 200 ms — douze secondes de retard ne coûtent rien.
+        """
+        bandes = list(self.strips.values())
+        if not bandes:
+            return
+        objs = _pw_objects()
+        for s in bandes:
+            avant = s.capteurs
+            s.capteurs = capteurs_paralleles(objs, s.node)
+            if s.capteurs and s.capteurs != avant:
+                print(f"[fx] {s.id} : {', '.join(s.capteurs)} capte(nt) AUSSI "
+                      f"l'entrée matérielle — ces flux-là ne passent par aucun "
+                      f"plugin", flush=True)
+
     def _watch(self):
         """Relève les bandes tombées. Toutes les 3 s : assez pour que la coupure
         se compte en secondes, assez peu pour ne rien coûter."""
+        tour = 0
         while True:
             time.sleep(3.0)
+            tour += 1
+            if tour % self.CAPTEURS_RONDES == 0:
+                try:
+                    self._relever_capteurs()
+                except Exception as e:                    # jamais fatal
+                    print(f"[fx] relevé des capteurs : {e}", flush=True)
             for s in list(self.strips.values()):
                 try:
                     # Non bloquant : si une action utilisateur tient le verrou, on

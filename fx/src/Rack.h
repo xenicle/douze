@@ -21,6 +21,15 @@
 namespace douze
 {
 
+/** Y a-t-il seulement un écran où poser une fenêtre ?
+
+    Un service utilisateur lancé au BOOT démarre avant que la session graphique
+    n'ait publié DISPLAY / WAYLAND_DISPLAY : l'audio, lui, n'en a pas besoin et
+    marche parfaitement, mais Wine se rabat alors sur son pilote nul
+    (« nodrv_CreateWindow : the explorer process failed to start ») et
+    l'ouverture d'un éditeur Windows ne rend JAMAIS la main. */
+bool hasDisplay();
+
 class Rack
 {
 public:
@@ -76,6 +85,15 @@ public:
 
     /** Déplace un étage (réordonne la chaîne). */
     bool moveStage (int from, int to);
+
+    /** Retire cet étage de la liste des éditeurs bloquants — « je réessaie ».
+
+        Sans porte de sortie, une inscription était DÉFINITIVE : un plugin sain
+        condamné par un accident d'environnement (démon sans affichage) ne se
+        rouvrait plus jamais, et rien dans l'interface ne permettait de revenir
+        dessus. Écrit le fichier partagé, donc les autres bandes le verront à
+        leur prochain clic (`toggleEditor` relit la liste). */
+    bool forgetEditorHang (int index);
 
     /** Y a-t-il un étage tombé (ou en cours de reprise) ? Test bon marché,
         appelé souvent : il évite d'entrer dans la reprise pour rien. */

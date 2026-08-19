@@ -1114,6 +1114,17 @@ int main (int argc, char* argv[])
             }
             else if (path == "/editor")
             {
+                // Sans écran, rien ne s'ouvrira — et l'essai coûterait la bande
+                // (Wine sans pilote graphique ne rend pas la main), puis le
+                // plugin serait inscrit « bloquant » à vie. On répond donc NON,
+                // avec la raison ET la manœuvre : c'est le démon qu'il faut
+                // relancer, pas le plugin qu'il faut changer.
+                if (! douze::hasDisplay())
+                    return douze::errReply (409, juce::String (juce::CharPointer_UTF8 (
+                        "aucun affichage : cette bande a démarré avant ta session "
+                        "graphique (DISPLAY / WAYLAND_DISPLAY absents). Relance le "
+                        "démon : systemctl --user restart douze")));
+
                 // FIRE-AND-FORGET, volontairement.
                 //
                 // Le serveur HTTP ne traite qu'une requête à la fois : attendre
@@ -1129,6 +1140,14 @@ int main (int argc, char* argv[])
                     rack.toggleEditor (idx);
                 });
                 ok = true;
+            }
+            else if (path == "/editor/unblock")
+            {
+                // « Réessayer » : la liste des éditeurs bloquants n'avait aucune
+                // porte de sortie, alors qu'elle peut se tromper (un plugin sain
+                // condamné parce que le démon tournait sans affichage). Retirer
+                // l'inscription est une décision de l'utilisateur, pas du moteur.
+                ok = rack.forgetEditorHang (num ("index"));
             }
             else if (path == "/params")
             {

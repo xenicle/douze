@@ -114,6 +114,33 @@ if [[ $yabok -eq 0 ]]; then
   done
 fi
 
+# --- 2 ter. affichage : sans lui, aucun éditeur ne s'ouvre ------------------
+# Le moteur n'a besoin d'aucun écran pour TRAITER le son — et c'est bien le
+# piège. Un démon lancé par systemd au démarrage de la machine tourne avant que
+# la session graphique n'ait publié DISPLAY / WAYLAND_DISPLAY : les bandes
+# sonnent juste, mais Wine se rabat sur son pilote nul (« nodrv_CreateWindow :
+# the explorer process failed to start ») et l'ouverture d'un éditeur ne rend
+# JAMAIS la main — bande figée, relancée par le watchdog, plugin inscrit
+# « éditeur bloquant » à vie. Vécu le 19/08/2026 : KStrip, puis SPL De-Esser.
+#
+# On va donc chercher l'affichage là où la session l'a publié. C'est utile au
+# lancement MANUEL d'une bande longtemps après le boot ; l'ordonnancement du
+# service (After=graphical-session.target, cf. systemd/douze.service) reste ce
+# qui couvre le démarrage automatique.
+if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+  while IFS='=' read -r k v; do
+    case "$k" in
+      DISPLAY|WAYLAND_DISPLAY|XAUTHORITY) [[ -n "$v" ]] && export "$k=$v" ;;
+    esac
+  done < <(timeout 5 systemctl --user show-environment 2>/dev/null || true)
+
+  if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+    echo "[run] affichage récupéré de la session : DISPLAY=${DISPLAY:-∅} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-∅}"
+  else
+    echo "[run] pas d'affichage : les éditeurs de plugins seront refusés (l'audio, lui, marche)."
+  fi
+fi
+
 # --- 3. nom du nœud dans le graphe -----------------------------------------
 # Le nom du client JACK est figé à la COMPILATION dans JUCE
 # (JUCE_JACK_CLIENT_NAME) → pour nommer chaque bande, on surcharge le nœud à

@@ -1,5 +1,6 @@
 #include "SelfTest.h"
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
@@ -277,6 +278,75 @@ void testResolutionEtage (PluginScan& scan)
              "et sans l'extension pour un chemin nu");
 }
 
+/** L'affichage, et la liste noire des éditeurs — celle qui a condamné deux
+    plugins sains.
+
+    Le 19/08/2026 : démon lancé par systemd au boot, donc sans DISPLAY. Wine sans
+    pilote graphique ne rend jamais la main sur l'ouverture d'un éditeur ; le
+    watchdog relance la bande ; le deadman en conclut « ce plugin fige » et
+    l'inscrit DÉFINITIVEMENT. Deux garde-fous depuis : on ne TENTE rien sans
+    écran, et l'inscription se révoque. */
+void testAffichageEtListeNoire (PluginScan& scan)
+{
+    std::cout << "[test] affichage absent et liste des éditeurs bloquants" << std::endl;
+
+    const auto sauveD = juce::SystemStats::getEnvironmentVariable ("DISPLAY", {});
+    const auto sauveW = juce::SystemStats::getEnvironmentVariable ("WAYLAND_DISPLAY", {});
+    const auto sauveC = juce::SystemStats::getEnvironmentVariable ("DOUZE_FX_CACHE", {});
+
+    ::unsetenv ("DISPLAY");
+    ::unsetenv ("WAYLAND_DISPLAY");
+    verifie (! hasDisplay(), "sans DISPLAY ni WAYLAND_DISPLAY : aucun affichage");
+
+    ::setenv ("DISPLAY", ":0", 1);
+    verifie (hasDisplay(), "X11 seul suffit");
+    ::unsetenv ("DISPLAY");
+    ::setenv ("WAYLAND_DISPLAY", "wayland-1", 1);
+    verifie (hasDisplay(), "Wayland seul suffit");
+
+    // Cache ISOLÉ : la vraie liste contient les coupables appris à l'usage, un
+    // test n'a pas à les effacer.
+    // Répertoire À NOUS : « douze-fx-selftest » appartient au test des racks, et
+    // on le vide en partant.
+    auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                 .getChildFile ("douze-fx-selftest-hang");
+    tmp.deleteRecursively();
+    tmp.createDirectory();
+    ::setenv ("DOUZE_FX_CACHE", tmp.getFullPathName().toRawUTF8(), 1);
+
+    const juce::String chemin = "/chemin/qui/nexiste/pas.vst3";
+    tmp.getChildFile ("editor_hang.txt").replaceWithText (chemin + "\n");
+
+    {
+        Rack rack (scan);
+        rack.prepare (48000.0, 512, 2);
+        rack.addStage (chemin);
+
+        auto infos = rack.stageInfo();
+        verifie (infos.size() == 1 && infos[0].editorHangs,
+                 "un plugin de la liste est signalé bloquant");
+
+        verifie (rack.forgetEditorHang (0), "« réessayer » retire l'inscription");
+        infos = rack.stageInfo();
+        verifie (infos.size() == 1 && ! infos[0].editorHangs,
+                 "et l'étage n'est plus signalé");
+        verifie (! tmp.getChildFile ("editor_hang.txt").existsAsFile(),
+                 "liste vide = fichier supprimé, pas un fichier vide");
+        verifie (! rack.forgetEditorHang (0), "oublier deux fois ne prétend pas avoir agi");
+        verifie (! rack.forgetEditorHang (7), "index hors chaîne : refusé sans dégât");
+    }
+
+    tmp.deleteRecursively();
+
+    // On rend l'environnement tel qu'on l'a trouvé : les tests suivants
+    // tournent dans le même process.
+    ::unsetenv ("WAYLAND_DISPLAY");
+    ::unsetenv ("DOUZE_FX_CACHE");
+    if (sauveD.isNotEmpty()) ::setenv ("DISPLAY", sauveD.toRawUTF8(), 1);
+    if (sauveW.isNotEmpty()) ::setenv ("WAYLAND_DISPLAY", sauveW.toRawUTF8(), 1);
+    if (sauveC.isNotEmpty()) ::setenv ("DOUZE_FX_CACHE", sauveC.toRawUTF8(), 1);
+}
+
 } // namespace
 
 //==============================================================================
@@ -298,6 +368,7 @@ int runSelfTests (const juce::String& filtre)
         { "rack",         testRackAllerRetour },
         { "format",       testChangementDeFormat },
         { "resolution",   testResolutionEtage },
+        { "affichage",    testAffichageEtListeNoire },
     };
 
     for (const auto& c : cas)

@@ -498,9 +498,10 @@ Fait depuis :
 - **SSE pour l'onglet FX** ✅ — le démon pousse l'état des bandes, gaté par la
   présence d'auditeurs. Supprime la multiplication par page des sollicitations du
   verrou du rack.
-- **Tests** ✅ — `fx/tools/run_tests.sh` : 34 vérifications moteur (hors device) +
-  62 côté superviseur/scan. Le harnais a été validé en cassant volontairement une
-  attente (il sortait en 0 : `|| true` après un pipe réinitialise PIPESTATUS).
+- **Tests** ✅ — `fx/tools/run_tests.sh` : 43 vérifications moteur (hors device) +
+  99 côté superviseur/scan (142 en tout — le compte annoncé jusqu'ici, « 96 »,
+  ne comptait que la moitié Python). Le harnais a été validé en cassant
+  volontairement une attente (il sortait en 0 : `|| true` après un pipe réinitialise PIPESTATUS).
 - **Détails** ✅ — bypass par étage visible et sauvegardé, vumètre par étage,
   `prev_mute` persisté, `PROTOCOL.md` remis à jour.
 

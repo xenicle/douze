@@ -895,6 +895,16 @@ class Strip:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            # Un REFUS n'est pas une absence. `HTTPError` dérive de `URLError`,
+            # donc le moteur qui répondait « non, et voici pourquoi » tombait
+            # dans le fourre-tout ci-dessous : la GUI affichait « bande
+            # injoignable » à la place de la raison, pour une bande qui allait
+            # parfaitement bien.
+            try:
+                return json.loads(e.read() or b"{}")
+            except (ValueError, OSError):
+                return {"ok": False, "error": f"HTTP {e.code}"}
         except (urllib.error.URLError, OSError, ValueError):
             return None
 

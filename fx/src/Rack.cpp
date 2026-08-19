@@ -55,6 +55,13 @@ public:
 // « Paramètres » pour régler le plugin).
 static juce::File fxCacheDir()
 {
+    // DOUZE_FX_CACHE : pour que la batterie de tests n'écrive pas dans le VRAI
+    // cache. La liste des éditeurs bloquants y vit ; un test qui la réécrit
+    // effacerait les vrais coupables appris à l'usage.
+    if (const auto forced = juce::SystemStats::getEnvironmentVariable ("DOUZE_FX_CACHE", {});
+        forced.isNotEmpty())
+        return juce::File (forced);
+
     return juce::File::getSpecialLocation (juce::File::userHomeDirectory)
              .getChildFile (".cache/douze-fx");
 }
@@ -69,6 +76,24 @@ static juce::File editorDeadmanFile()
 static juce::File editorHangListFile()
 {
     return fxCacheDir().getChildFile ("editor_hang.txt");
+}
+
+// L'environnement peut-il seulement AFFICHER une fenêtre ? (déclaré dans Rack.h)
+//
+// Panne vécue le 19/08/2026 : le démon, lancé par systemd au démarrage de la
+// machine, tourne AVANT que la session graphique n'ait publié DISPLAY /
+// WAYLAND_DISPLAY. L'audio s'en moque et la bande sonne juste ; mais Wine se
+// rabat sur son pilote nul, l'ouverture de l'éditeur ne rend jamais la main, le
+// watchdog relance la bande, et le deadman ci-dessous inscrit le plugin comme
+// « éditeur bloquant » — DÉFINITIVEMENT. Deux plugins parfaitement sains
+// (KStrip, puis SPL De-Esser) sont devenus impossibles à ouvrir en deux clics.
+//
+// D'où : sans affichage, on ne TENTE rien. Refuser en disant pourquoi est
+// infiniment préférable à essayer, figer, puis condamner un innocent.
+bool hasDisplay()
+{
+    return juce::SystemStats::getEnvironmentVariable ("WAYLAND_DISPLAY", {}).isNotEmpty()
+        || juce::SystemStats::getEnvironmentVariable ("DISPLAY", {}).isNotEmpty();
 }
 
 static juce::StringArray readEditorHangList()
@@ -798,6 +823,26 @@ void Rack::toggleEditor (int index)
     if (inst == nullptr)
         return;
 
+    // Sans écran, aucune fenêtre ne peut s'ouvrir — et c'est justement là que
+    // Wine part en vrille sans jamais revenir. On refuse AVANT le deadman :
+    // condamner un plugin pour une panne d'environnement était le pire des
+    // verdicts, puisqu'il survivait à la panne.
+    if (open == nullptr && ! hasDisplay())
+    {
+        std::cout << "[rack] éditeur " << index << " (" << name
+                  << ") : pas d'affichage (DISPLAY / WAYLAND_DISPLAY absents) — "
+                     "rien tenté." << std::endl;
+        return;
+    }
+
+    // La liste est PARTAGÉE par toutes les bandes et l'utilisateur peut en
+    // retirer un plugin (`forgetEditorHang`) depuis n'importe laquelle : on la
+    // relit ici, au rythme du clic, pour ne pas rester sur une copie périmée.
+    {
+        const juce::ScopedLock sl (lock_);
+        editorHangs_ = readEditorHangList();
+    }
+
     // Déjà vu figer : on ne rejoue pas la panne (l'utilisateur garde le panneau
     // « Paramètres », qui pilote le plugin sans passer par son UI).
     if (open == nullptr && editorHangs_.contains (path))
@@ -874,6 +919,44 @@ void Rack::toggleEditor (int index)
     if (juce::isPositiveAndBelow (index, stages_.size())
         && stages_.getUnchecked (index)->inst.get() == inst)
         stages_.getUnchecked (index)->editor = std::move (win);
+}
+
+//==============================================================================
+bool Rack::forgetEditorHang (int index)
+{
+    juce::String path;
+
+    {
+        const juce::ScopedLock sl (lock_);
+
+        if (! juce::isPositiveAndBelow (index, stages_.size()))
+            return false;
+
+        path = stages_.getUnchecked (index)->path;
+    }
+
+    auto list = readEditorHangList();
+
+    if (! list.contains (path))
+        return false;
+
+    list.removeString (path);
+
+    // Liste vide = fichier supprimé, pas un fichier vide : le prochain démarrage
+    // n'a alors rien à lire, et l'état « aucun éditeur condamné » se voit d'un
+    // coup d'œil dans le cache.
+    if (list.isEmpty())
+        editorHangListFile().deleteFile();
+    else
+        editorHangListFile().replaceWithText (list.joinIntoString ("\n") + "\n");
+
+    {
+        const juce::ScopedLock sl (lock_);
+        editorHangs_ = list;
+    }
+
+    std::cout << "[rack] éditeur bloquant oublié (on réessaie) : " << path << std::endl;
+    return true;
 }
 
 //==============================================================================

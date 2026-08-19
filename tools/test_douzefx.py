@@ -358,6 +358,55 @@ def test_bande_figee(tmp):
             "process mort : arrêtée, pas figée")
 
 
+def test_refus_transmis(tmp):
+    """Un moteur qui dit NON n'est pas un moteur absent.
+
+    `urllib.error.HTTPError` dérive de `URLError` : le refus argumenté du moteur
+    (« aucun affichage », 409) tombait dans le même filet que « personne au bout
+    du fil », et la GUI affichait « bande injoignable » pour une bande qui allait
+    parfaitement bien. Le diagnostic devenait impossible à lire.
+    """
+    print("[test] refus du moteur transmis tel quel")
+    import douzefx
+    import http.server, threading
+
+    douzefx.LOG_DIR = tmp
+
+    class Faux(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            corps = b'{"ok": false, "error": "aucun affichage"}'
+            self.send_response(409)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(corps)))
+            self.end_headers()
+            self.wfile.write(corps)
+
+        def do_GET(self):
+            self.do_POST()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Faux)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        cfg = {"id": "r", "name": "R", "rack": "", "source": {}, "dest": {}}
+        s = douzefx.Strip(cfg, 0)
+        s.port = srv.server_address[1]
+
+        out = s.api("/editor", {"index": 0}, timeout=5)
+        verifie(isinstance(out, dict), f"un refus revient comme un objet, pas None : {out!r}")
+        verifie(out.get("error") == "aucun affichage",
+                f"et il porte la RAISON du moteur : {out!r}")
+
+        # Corollaire : une bande qui refuse est vivante. C'était déjà vrai, mais
+        # ça ne se voyait pas — elle passait pour morte.
+        verifie(s.alive(), "une bande qui refuse reste comptée comme vivante")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 class FauxProc:
     """Un process dont on décide la mort. `poll()` : None = vivant."""
 
@@ -678,6 +727,7 @@ def main():
         test_vue_partagee(tmp)
         test_bande_figee(tmp)
         test_veille_pipewire(tmp)
+        test_refus_transmis(tmp)
         test_profils(tmp)
         test_readoption()
         test_scan_amorcage(tmp)

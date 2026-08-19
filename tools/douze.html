@@ -484,7 +484,8 @@ const I18N = {
        fxadded: "ajoutés", fxfailed: "en erreur",
        fxsortby: "Trier", fxsortaz: "A→Z", fxsortbrand: "Marque", fxsorttype: "Type",
        fxnobrand: "sans marque", fxnotype: "sans type",
-       fxguihang: "L'UI de ce plugin bloque la bande — utilise Paramètres (≡)",
+       fxguihang: "L'UI de ce plugin a déjà bloqué la bande — clic = réessayer",
+       fxguiretry: "Cet éditeur a déjà figé la bande une fois.\n\nSi c'était un accident (démon démarré sans affichage), réessayer ne coûte rien. Sinon la bande peut se relancer et couper le son quelques secondes.\n\nOn réessaie ?",
        fxasked: "%s demandé", fxparams: "Paramètres", fxretry: "Réessayer",
        fxnew: "＋ Nouvelle bande", fxnewtitle: "Nouvelle bande", fxnname: "Nom",
        fxnsrc: "Source", fxnch: "Canaux", fxnchhint: "1 = mono",
@@ -534,7 +535,8 @@ const I18N = {
        fxadded: "added", fxfailed: "failed",
        fxsortby: "Sort", fxsortaz: "A→Z", fxsortbrand: "Brand", fxsorttype: "Type",
        fxnobrand: "no brand", fxnotype: "no type",
-       fxguihang: "This plug-in's UI freezes the strip — use Parameters (≡)",
+       fxguihang: "This plug-in's UI froze the strip before — click to try again",
+       fxguiretry: "This editor froze the strip once.\n\nIf that was an accident (daemon started with no display), retrying costs nothing. Otherwise the strip may restart and drop audio for a few seconds.\n\nTry again?",
        fxasked: "%s requested", fxparams: "Parameters", fxretry: "Retry",
        fxnew: "＋ New strip", fxnewtitle: "New strip", fxnname: "Name",
        fxnsrc: "Source", fxnch: "Channels", fxnchhint: "1 = mono",
@@ -1009,9 +1011,21 @@ function fxChip(strip, stage, i, total) {
     // le bouton et on explique, au lieu d'offrir un clic qui coupe le son.
     const hangs = !!stage.editor_hangs;
     el.insertAdjacentHTML("beforeend",
-      `<button type="button" ${hangs ? "disabled" : ""}
-               title="${hangs ? T("fxguihang") : "GUI"}">▣</button>`);
-    if (!hangs) el.lastElementChild.onclick = () => fxApi(strip.id, "/editor", {index: i});
+      `<button type="button" title="${hangs ? T("fxguihang") : "GUI"}">${hangs ? "▣!" : "▣"}</button>`);
+    // Le bouton n'est plus GRISÉ quand le plugin est sur la liste noire : cette
+    // liste peut se tromper. Le 19/08/2026, un démon lancé au boot — donc sans
+    // DISPLAY — a fait pendre l'ouverture de deux plugins parfaitement sains,
+    // qui se sont retrouvés condamnés À VIE, sans que rien dans l'interface ne
+    // permette de revenir dessus (il fallait éditer un fichier de cache).
+    // Un verdict automatique doit rester révocable par celui qui écoute.
+    el.lastElementChild.onclick = () => {
+      if (hangs && !confirm(T("fxguiretry"))) return;
+      const step = hangs ? fxApi(strip.id, "/editor/unblock", {index: i})
+                         : Promise.resolve({ok: true});
+      step.then(() => fxApi(strip.id, "/editor", {index: i}))
+          .then(r => { if (r && r.ok === false) alert(r.error || r.msg || "?"); })
+          .then(fxRefresh);
+    };
   }
 
   el.insertAdjacentHTML("beforeend", `<button type="button" title="✕">✕</button>`);

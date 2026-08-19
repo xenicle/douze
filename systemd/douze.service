@@ -15,6 +15,19 @@
 Description=Douze - GUI SSL 12
 # pas de After=réseau : tout est local ; le device peut arriver plus tard,
 # d'où le Restart en boucle tant que la SSL 12 n'est pas là.
+#
+# En revanche il FAUT attendre la session graphique. Lancé au démarrage de la
+# machine (WantedBy=default.target), le démon partait avant que le compositeur
+# n'ait publié DISPLAY / WAYLAND_DISPLAY dans l'environnement de systemd --user,
+# et ses bandes en héritaient : l'audio marchait, mais Wine n'avait plus de
+# pilote graphique, l'ouverture d'un éditeur de plugin ne rendait jamais la main,
+# et le deadman de Douze FX inscrivait le plugin comme « éditeur bloquant » —
+# définitivement. Deux plugins sains ont été condamnés ainsi le 19/08/2026.
+#
+# `WantedBy=graphical-session.target` (sans PartOf) : on DÉMARRE avec la session,
+# on ne s'arrête pas avec elle — la carte reste configurée si le compositeur
+# tombe ou redémarre.
+After=graphical-session.target
 
 [Service]
 # Sans ça, la sortie de Python est bufferisée par BLOCS dès qu'elle ne va pas
@@ -41,4 +54,4 @@ Restart=on-failure
 RestartSec=10
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target

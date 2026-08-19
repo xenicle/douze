@@ -169,7 +169,7 @@
             echo "Douze FX (host de plugins, JUCE 9) :"
             echo "  cmake -S fx -B build-fx -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo"
             echo "  cmake --build build-fx        # 1er build = clone JUCE 9.0.1"
-            echo "  fx/tools/run_tests.sh         # 96 vérifications, sans carte"
+            echo "  fx/tools/run_tests.sh         # 142 vérifications, sans carte"
             echo "─────────────────────────────────────────────────────"
           '';
         };

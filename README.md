@@ -174,6 +174,13 @@ ExecStart=/run/current-system/sw/bin/nix develop %h/douze --command python tools
 Open <http://localhost:1212>. If the card is absent at login the unit retries
 every 10 s.
 
+The unit is `WantedBy=graphical-session.target`, not `default.target`, and that
+matters: a daemon started at boot runs *before* the compositor publishes
+`DISPLAY` / `WAYLAND_DISPLAY` into the `systemd --user` environment. Audio does
+not care, so everything sounds right — but no plug-in editor can ever open (see
+below). Waiting for the session costs nothing; the card is still configured a
+second after you log in.
+
 **The daemon owns the USB device.** The `sslctl` CLI cannot talk to the card
 while the daemon runs — stop the service first, or drive everything from the
 GUI.
@@ -404,6 +411,30 @@ alike — and says so in the journal:
 
 Plugins scanned while the variable was missing were recorded as broken: rescan
 them once it is fixed.
+
+### A plug-in's UI refuses to open ("this plug-in's UI froze the strip")
+
+Douze FX remembers editors that hang, because some really do: a Waves editor
+under Wine can take the strip's control thread and never give it back. The
+memory lives in `~/.cache/douze-fx/editor_hang.txt`, and it used to be final.
+
+It could also be *wrong*. With no `DISPLAY` (a daemon started at boot, before
+the graphical session), Wine falls back to its null driver — `nodrv_CreateWindow:
+the explorer process failed to start` in the strip log — and **every** editor
+hangs, healthy ones included. They were then blacklisted for good.
+
+Three things now prevent that. The unit waits for the graphical session; the
+launcher recovers the display from `systemctl --user show-environment` when it
+can; and the engine refuses to even try without a display, saying so instead of
+freezing:
+
+```
+aucun affichage : cette bande a démarré avant ta session graphique
+```
+
+And the verdict is no longer final: the ▣ button of a blacklisted plug-in shows
+`▣!` and asks whether to try again. If it hangs for real, the watchdog restarts
+the strip and it goes back on the list — where it belongs.
 
 ### Meters do not move, although audio is flowing
 

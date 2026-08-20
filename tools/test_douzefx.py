@@ -414,6 +414,81 @@ def test_capteurs_paralleles():
             "bande arrêtée (absente du graphe) : rien à signaler")
 
 
+def test_threads_temps_reel(tmp):
+    """Les threads audio d'une bande tournent-ils en SCHED_FIFO / SCHED_RR ?
+
+    Vécu le 20/08/2026 : TOUT le chemin audio de la machine était en
+    SCHED_OTHER. Les bandes se déclaraient en marche, les plugins traitaient,
+    les vumètres bougeaient — et le son décrochait en rafale dès un partage
+    d'écran 4K (994 xruns sur l'entrée de la carte). Rien nulle part ne le
+    disait, et la cause était hors de Douze.
+    """
+    print("[test] threads audio hors temps réel")
+    from douzefx import _sched_thread, threads_audio_sans_rt
+
+    def stat(pid, comm, politique, prio=0):
+        # /proc/<pid>/stat : champ 40 = rt_priority, champ 41 = policy. Après la
+        # DERNIÈRE `)`, reste[0] est le champ 3, donc le champ N est reste[N-3].
+        bourre = " ".join(["0"] * 36)
+        return f"{pid} ({comm}) S {bourre} {prio} {politique} 0 0 0"
+
+    def faux_proc(racine, pid, threads):
+        for tid, (comm, politique) in enumerate(threads.items(), start=pid + 1):
+            d = os.path.join(racine, str(pid), "task", str(tid))
+            os.makedirs(d)
+            with open(os.path.join(d, "comm"), "w") as f:
+                f.write(comm + "\n")
+            with open(os.path.join(d, "stat"), "w") as f:
+                f.write(stat(tid, comm, politique))
+
+    # --- le piège du champ `comm` -------------------------------------------
+    racine = os.path.join(tmp, "proc-parse")
+    os.makedirs(racine)
+    piege = os.path.join(racine, "stat")
+    with open(piege, "w") as f:
+        f.write(stat(42, "au (bon) endroit", 1, 88))
+    verifie(_sched_thread(piege) == (1, 88),
+            "un comm contenant espaces et parenthèses ne décale pas les champs")
+
+    # --- une bande en bon état ----------------------------------------------
+    # ⚠️ Les `pw-<nœud>` sont les boucles de CONTRÔLE de pipewire-jack : elles
+    # sont en SCHED_OTHER même quand tout va bien (constaté sur les deux vraies
+    # bandes, chemin audio en FF 83). Les compter allumait une alerte permanente
+    # — le premier jet de ce relevé le faisait, et le vrai système l'a démenti.
+    ok = os.path.join(tmp, "proc-ok")
+    faux_proc(ok, 100, {"data-loop.0": 1, "data-loop.1": 1,
+                        "pw-douze-fx": 0, "JUCE Timer": 0})
+    sans, total = threads_audio_sans_rt(100, racine=ok)
+    verifie((sans, total) == ([], 2),
+            "deux data-loops en FIFO : rien à signaler")
+    verifie(total == 2,
+            "les boucles de contrôle pw-* ne sont PAS comptées (alerte permanente sinon)")
+    verifie("JUCE Timer" not in sans,
+            "les threads NON audio sont ignorés")
+
+    # --- SCHED_RR compte aussi ----------------------------------------------
+    rr = os.path.join(tmp, "proc-rr")
+    faux_proc(rr, 200, {"data-loop.0": 2})
+    verifie(threads_audio_sans_rt(200, racine=rr) == ([], 1),
+            "SCHED_RR est du temps réel aussi (c'est ce qu'accorde RTKit)")
+
+    # --- la panne du 20/08 ---------------------------------------------------
+    ko = os.path.join(tmp, "proc-ko")
+    faux_proc(ko, 300, {"data-loop.0": 0, "data-loop.1": 0, "wine-stdio": 0})
+    sans, total = threads_audio_sans_rt(300, racine=ko)
+    verifie((sans, total) == (["data-loop.0", "data-loop.1"], 2),
+            "data-loops en SCHED_OTHER : les deux sont nommés")
+
+    # --- moteur qui démarre encore -------------------------------------------
+    vide = os.path.join(tmp, "proc-vide")
+    faux_proc(vide, 400, {"douze_fx": 0, "pw-douze-fx": 0, "wine-stdio": 0})
+    verifie(threads_audio_sans_rt(400, racine=vide) == ([], 0),
+            "aucun thread audio trouvé : on ne conclut rien plutôt qu'alarmer")
+
+    verifie(threads_audio_sans_rt(999, racine=vide) == ([], 0),
+            "process disparu : pas d'exception, pas d'alerte")
+
+
 def test_refus_transmis(tmp):
     """Un moteur qui dit NON n'est pas un moteur absent.
 
@@ -784,6 +859,7 @@ def main():
         test_bande_figee(tmp)
         test_veille_pipewire(tmp)
         test_capteurs_paralleles()
+        test_threads_temps_reel(tmp)
         test_refus_transmis(tmp)
         test_profils(tmp)
         test_readoption()

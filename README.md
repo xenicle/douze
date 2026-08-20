@@ -463,6 +463,62 @@ the hardware input a strip is processing, and names them in `/fx`
 (`raw_capture`) and in the GUI. It does not rewire them: a stream you pointed
 somewhere on purpose is yours to keep.
 
+### Audio breaks up as soon as the machine gets busy
+
+Look for an amber pill on the strip: *"not realtime"*.
+
+Audio only meets its deadline if the threads carrying it are scheduled ahead of
+everything else. When they are not, everything still *looks* healthy — the strip
+runs, the plug-ins process, the meters move — and the sound falls apart the
+moment anything else wants the CPU. Sharing a 4K screen is the classic trigger,
+and it makes the problem look like a bug in whatever app you were streaming
+with.
+
+Check the whole graph, not just Douze:
+
+```bash
+ps -eLo cls,rtprio,comm | grep -E ' FF | RR '
+```
+
+You want PipeWire's `data-loop.0`, plus one `data-loop.N` per running engine.
+`FF` is `SCHED_FIFO` and `RR` is `SCHED_RR`; either is fine. If the only hits are
+kernel threads (`irq/…`, `migration/…`), nothing in your audio path is realtime.
+
+The cause is outside Douze. Things that have really done it:
+
+- **A second `libpipewire-module-rt`.** PipeWire drop-ins *append* to
+  `context.modules`, so a "low latency" preset that re-declares the module gets
+  it loaded twice — and the second instance can fail to acquire privileges while
+  still governing thread promotion. `pw-cli list-objects Module | grep -c
+  module-rt` must print `1`.
+- **A desktop process scheduler** (system76-scheduler and friends). Some demote
+  every userspace `SCHED_FIFO` thread within seconds and drop user services to
+  `nice 9`; their exception lists do not always hold.
+- **A realtime watchdog** such as musnix's `das_watchdog`, which suspends
+  realtime whenever it believes the machine is stuck — that is, under load.
+- **No nice budget for user services.** PAM's `loginLimits` do not reach
+  `systemd --user`. With `LimitNICE=0` on `user@.service`, PipeWire logs
+  `mod.rt: could not set nice-level to -11: Permission denied` at every start.
+
+To get sound back right now — no root, nothing to restart:
+
+```bash
+for t in $(ps -eLo tid,comm --no-headers | awk '$2 ~ /^data-loop/ {print $1}'); do
+  chrt -R -f -p 88 "$t"
+done
+```
+
+`-R` is not optional. A thread that already carries `SCHED_RESET_ON_FORK` — one
+that *was* promoted and then demoted — refuses a plain `chrt` with a thoroughly
+misleading `Operation not permitted`. Threads belonging to other users are
+refused too; that is harmless, skip them.
+
+Douze reports this by itself, in the same 12 s sweep as the raw-capture check,
+as `no_rt` in `/fx`. It does not promote anything: repairing this silently would
+hide the regression instead of showing it. Only `data-loop*` threads are
+counted — the `pw-<node>` ones are pipewire-jack's *control* loops and are
+legitimately not realtime.
+
 ### Meters do not move, although audio is flowing
 
 The engine resets its peaks on every read — reading is consuming. The daemon

@@ -487,6 +487,10 @@ const I18N = {
        fxguihang: "L'UI de ce plugin a déjà bloqué la bande — clic = réessayer",
        fxrawcap: "%s capte aussi l'entrée brute",
        fxrawcaptitle: "Ce flux ne traverse aucun plugin : cette application entend le son NON TRAITÉ. Choisis le micro de la bande dans ses réglages.",
+       fxnort: "pas en temps réel",
+       // Pas de guillemet double ici : cette chaîne est injectée telle quelle
+       // dans title=«…», sans passer par esc() — comme fxrawcaptitle.
+       fxnortitle: "Les threads audio de cette bande tournent en SCHED_OTHER : le son décrochera dès la première charge sérieuse (partage d'écran, compilation…). La cause est en dehors de Douze — ordonnanceur du bureau, module-rt de PipeWire, ou limites du service utilisateur. Relever : ps -eLo cls,rtprio,comm | grep -E ' FF | RR '",
        fxguiretry: "Cet éditeur a déjà figé la bande une fois.\n\nSi c'était un accident (démon démarré sans affichage), réessayer ne coûte rien. Sinon la bande peut se relancer et couper le son quelques secondes.\n\nOn réessaie ?",
        fxasked: "%s demandé", fxparams: "Paramètres", fxretry: "Réessayer",
        fxnew: "＋ Nouvelle bande", fxnewtitle: "Nouvelle bande", fxnname: "Nom",
@@ -540,6 +544,8 @@ const I18N = {
        fxguihang: "This plug-in's UI froze the strip before — click to try again",
        fxrawcap: "%s is also capturing the raw input",
        fxrawcaptitle: "That stream goes through no plug-in: this app hears the UNPROCESSED sound. Pick the strip's microphone in its settings.",
+       fxnort: "not realtime",
+       fxnortitle: "This strip's audio threads run under SCHED_OTHER: sound will break up as soon as the machine gets busy (screen sharing, a build…). The cause is outside Douze — desktop scheduler, PipeWire's module-rt, or user service limits. Check with: ps -eLo cls,rtprio,comm | grep -E ' FF | RR '",
        fxguiretry: "This editor froze the strip once.\n\nIf that was an accident (daemon started with no display), retrying costs nothing. Otherwise the strip may restart and drop audio for a few seconds.\n\nTry again?",
        fxasked: "%s requested", fxparams: "Parameters", fxretry: "Retry",
        fxnew: "＋ New strip", fxnewtitle: "New strip", fxnname: "Name",
@@ -1109,6 +1115,15 @@ function fxRender() {
       ((s.raw_capture || []).length
         ? `<span class="pill amber" title="${T("fxrawcaptitle")}">${
              esc(T("fxrawcap").replace("%s", s.raw_capture.join(", ")))}</span>` : "") +
+      // Threads audio hors temps réel. Vécu le 20/08/2026 : TOUT le chemin audio
+      // de la machine tournait en SCHED_OTHER, la bande se déclarait en marche,
+      // les plugins traitaient, les vumètres bougeaient — et le son décrochait
+      // en rafale dès un partage d'écran 4K. Rien ne le disait, et la cause
+      // n'était pas dans Douze (module-rt chargé en double, ordonnanceur du
+      // bureau qui rétrogradait tout SCHED_FIFO). D'où : on le MONTRE.
+      ((s.no_rt || []).length
+        ? `<span class="pill amber" title="${T("fxnortitle")}">${
+             esc(T("fxnort"))}</span>` : "") +
       `<div class="acts"></div>`;
     const acts = top.querySelector(".acts");
 
@@ -1378,6 +1393,7 @@ function fxApply(d) {
     const sig = JSON.stringify(FXSTRIPS.map(s =>
       [s.id, s.name, s.running, s.ready, !!s.frozen, s.problem || "", s.notice || "",
        (s.raw_capture || []).join("|"),
+       (s.no_rt || []).length > 0,
        !!s.autostart,
        (s.chain || []).map(c => [c.name, c.error || "", c.bypass, !!c.editor_hangs])]));
 

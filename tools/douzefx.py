@@ -234,6 +234,89 @@ def capteurs_paralleles(objs, node):
     return sorted(noms)
 
 
+# Threads qui PORTENT l'audio dans un moteur : `data-loop.N`, la boucle de
+# données de la bibliothèque PipeWire, et elle seule.
+#
+# ⚠️ Surtout PAS les `pw-<nom du nœud>` : ce sont les boucles de CONTRÔLE de
+# pipewire-jack, et elles sont légitimement en SCHED_OTHER même sur un système
+# parfaitement réglé — vérifié le 20/08/2026 sur les deux bandes de Tony, dont
+# le chemin audio venait d'être remis en temps réel (`data-loop.0` en FF 83,
+# les deux `pw-douze-fx` en TS). Les inclure aurait allumé une alerte
+# PERMANENTE, c'est-à-dire pire que pas d'alerte du tout.
+#
+# Les threads Wine/yabridge vivent dans un AUTRE process (le host bridgé) :
+# hors de portée d'ici, et de toute façon ils suivent — ils étaient déjà en
+# temps réel quand le graphe, lui, ne l'était pas.
+THREADS_AUDIO = ("data-loop",)
+
+
+def _sched_thread(path):
+    """(politique, priorité) d'un thread, lues dans /proc/<pid>/task/<tid>/stat.
+
+    Le champ 2 est le `comm` du thread ENTRE PARENTHÈSES, et il peut contenir
+    des espaces et des parenthèses : on découpe après la DERNIÈRE `)`, sinon un
+    thread nommé « au (bon) endroit » décale tout le reste. Après ce point,
+    `reste[0]` est le champ 3, donc le champ N est `reste[N - 3]` : politique =
+    champ 41, priorité temps réel = champ 40 (cf. proc(5))."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        txt = f.read()
+    reste = txt[txt.rindex(")") + 2:].split()
+    return int(reste[38]), int(reste[37])
+
+
+SCHED_FIFO, SCHED_RR = 1, 2
+
+
+def threads_audio_sans_rt(pid, racine="/proc"):
+    """Threads audio de `pid` qui ne tournent PAS en temps réel.
+
+    `racine` n'existe que pour les tests : elle permet de poser un faux /proc
+    plutôt que d'exiger un moteur en marche pour vérifier la lecture.
+
+    Renvoie `(sans_rt, total)`. `total == 0` = aucun thread audio trouvé : le
+    moteur démarre encore, ou pipewire-jack n'a pas nommé ses threads comme on
+    l'attend — dans les deux cas on ne conclut rien plutôt que d'alarmer à tort.
+
+    Pourquoi ça mérite d'être surveillé : le 20/08/2026, TOUT le chemin audio de
+    la machine tournait en SCHED_OTHER (quatre causes cumulées — un
+    `libpipewire-module-rt` chargé en double par le module lowLatency de
+    nix-gaming, system76-scheduler qui rétrogradait tout SCHED_FIFO utilisateur,
+    das_watchdog qui suspend le temps réel sous charge, et `LimitNICE=0` sur
+    `user@.service`). Les bandes se déclaraient en marche, les plugins
+    traitaient, les vumètres bougeaient — et le son décrochait en rafale dès
+    qu'une charge lourde arrivait (partage d'écran 4K). RIEN nulle part ne le
+    disait : c'est exactement le genre de panne que ce projet a pris l'habitude
+    de signaler plutôt que de subir.
+
+    On ne PROMEUT pas (`chrt` marcherait, sans root, et tient — c'est le
+    dépannage à chaud), parce que réparer en silence masquerait la régression au
+    lieu de la montrer. Cf. `capteurs_paralleles`, même parti pris.
+    """
+    base = f"{racine}/{pid}/task"
+    sans, total = [], 0
+    try:
+        tids = os.listdir(base)
+    except OSError:                       # process disparu entre-temps
+        return [], 0
+    for tid in tids:
+        try:
+            with open(f"{base}/{tid}/comm", encoding="utf-8",
+                      errors="replace") as f:
+                comm = f.read().strip()
+        except OSError:
+            continue
+        if not comm.startswith(THREADS_AUDIO):
+            continue
+        try:
+            politique, _prio = _sched_thread(f"{base}/{tid}/stat")
+        except (OSError, ValueError, IndexError):
+            continue
+        total += 1
+        if politique not in (SCHED_FIFO, SCHED_RR):
+            sans.append(comm)
+    return sorted(set(sans)), total
+
+
 def readopt_streams(slug, mic):
     """Rebranche les applications qui VISENT `slug` sans y être reliées.
 
@@ -901,6 +984,9 @@ class Strip:
         # (cf. `capteurs_paralleles`) : relevé par le superviseur, pas ici — une
         # photo du graphe ne se prend pas au rythme d'affichage de la GUI.
         self.capteurs = []
+        # Threads audio du moteur qui ne tournent PAS en temps réel (cf.
+        # `threads_audio_sans_rt`). Relevé par le superviseur, comme ci-dessus.
+        self.sans_rt = []
         # Avis TRANSITOIRE (« je me suis relancée toute seule, voilà pourquoi »).
         # La GUI ne savait afficher que les échecs : une bande rétablie sans un
         # mot laissait croire qu'il ne s'était rien passé, et la cause — un
@@ -971,6 +1057,31 @@ class Strip:
         if self.proc is not None and self.proc.poll() is None:
             return True
         return self.api("/state", timeout=1) is not None
+
+    def _pid(self):
+        """PID du moteur, y compris quand la bande a été RÉ-ADOPTÉE.
+
+        Une bande ré-adoptée n'a pas de handle de process (cf. `alive`) : on la
+        retrouve comme le superviseur retrouve tout le reste, par son PORT.
+        C'est ça l'identité stable d'une bande — le PID, lui, change à chaque
+        relance automatique.
+        """
+        if self.proc is not None and self.proc.poll() is None:
+            return self.proc.pid
+        for entree in os.listdir("/proc"):
+            if not entree.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entree}/cmdline", "rb") as f:
+                    args = f.read().decode("utf-8", "replace").split("\0")
+            except OSError:               # process disparu entre listdir et open
+                continue
+            if not any("douze_fx" in a for a in args) or "--port" not in args:
+                continue
+            i = args.index("--port")
+            if i + 1 < len(args) and args[i + 1] == str(self.port):
+                return int(entree)
+        return None
 
     # ------------------------------------------------------------- micro virtuel
     def _start_virtual_node(self, role):
@@ -1260,6 +1371,7 @@ class Strip:
         # Plus de bande, plus de comparaison possible : garder la
         # dernière liste ferait vivre une alerte sur un graphe disparu.
         self.capteurs = []
+        self.sans_rt = []
 
     # ------------------------------------------------------------------ watchdog
     RESTART_WINDOW = 120.0              # secondes
@@ -1437,6 +1549,13 @@ class Strip:
         if self.capteurs:
             out["raw_capture"] = self.capteurs
 
+        # Même logique : un ÉTAT, pas un événement. Tant que les threads audio
+        # ne sont pas en temps réel, le son décrochera dès la première charge
+        # sérieuse — et rien d'autre ne le montrerait (cf.
+        # `threads_audio_sans_rt` pour la panne qui a motivé ce relevé).
+        if self.sans_rt:
+            out["no_rt"] = self.sans_rt
+
         if self.alive():
             live = self.api("/state", timeout=3)
             self.sante(live)              # gratuit : ce /state est déjà payé
@@ -1506,6 +1625,32 @@ class Supervisor:
                       f"l'entrée matérielle — ces flux-là ne passent par aucun "
                       f"plugin", flush=True)
 
+    def _relever_rt(self):
+        """Les threads audio des bandes tournent-ils bien en temps réel ?
+
+        Quelques lectures dans /proc, donc quasi gratuit — mais rangé dans la
+        même ronde espacée que `_relever_capteurs` : ce n'est pas un état qui
+        bouge entre deux rafraîchissements d'écran, et le chemin d'affichage
+        doit rester libre (leçon du 17/08 : lire `/state` volait les vumètres).
+        """
+        for s in list(self.strips.values()):
+            if not s.alive():
+                s.sans_rt = []
+                continue
+            pid = s._pid()
+            if pid is None:
+                continue
+            sans, total = threads_audio_sans_rt(pid)
+            if total == 0:
+                continue          # le moteur démarre : on ne conclut rien
+            avant, s.sans_rt = s.sans_rt, sans
+            if sans and sans != avant:
+                print(f"[fx] {s.id} : ses threads audio ({', '.join(sans)}) ne "
+                      f"tournent PAS en temps réel — le son décrochera à la "
+                      f"première charge sérieuse. Vérifier l'ordonnancement de "
+                      f"TOUT le graphe : ps -eLo cls,rtprio,comm | "
+                      f"awk '$1==\"FF\"||$1==\"RR\"'", flush=True)
+
     def _watch(self):
         """Relève les bandes tombées. Toutes les 3 s : assez pour que la coupure
         se compte en secondes, assez peu pour ne rien coûter."""
@@ -1518,6 +1663,10 @@ class Supervisor:
                     self._relever_capteurs()
                 except Exception as e:                    # jamais fatal
                     print(f"[fx] relevé des capteurs : {e}", flush=True)
+                try:
+                    self._relever_rt()
+                except Exception as e:                    # jamais fatal non plus
+                    print(f"[fx] relevé du temps réel : {e}", flush=True)
             for s in list(self.strips.values()):
                 try:
                     # Non bloquant : si une action utilisateur tient le verrou, on

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
-# gcroots.sh — protège Douze FX d'un `nix-collect-garbage`.
+# gcroots.sh — protège Douze FX et l'application de bureau d'un
+# `nix-collect-garbage`.
 #
 # POURQUOI : `douze_fx` est un binaire HORS du store, mais ses dépendances
 # (interpréteur ELF glibc, X11, freetype, ALSA…) sont DANS /nix/store. Un GC
@@ -13,7 +14,8 @@
 # store, que les anciennes racines ne couvrent pas.
 #
 # Usage : tools/gcroots.sh [--check]
-#   (sans argument) régénère les racines dans .gcroots/
+#   (sans argument) régénère les racines dans .gcroots/, et RECONSTRUIT
+#                   l'application de bureau si sa racine est tombée
 #   --check        n'écrit rien : liste ce qui n'est PAS protégé (code 1 si trou)
 # ============================================================================
 set -uo pipefail
@@ -23,9 +25,12 @@ ROOTDIR="$PWD/.gcroots"
 CHECK=0
 [[ "${1:-}" == "--check" ]] && CHECK=1
 
-# Binaires à protéger. L'application de bureau n'est PAS ici : elle est
-# construite par le flake et `.gcroots/douze-app` (créé par `nix build
-# --out-link`) la retient déjà.
+# Binaires à protéger. L'application de bureau n'est pas dans cette liste : elle
+# est DANS le store (paquet du flake) et c'est son propre lien
+# `.gcroots/douze-app` qui la retient. On la vérifie quand même, à part -> voir
+# `app_ok`. Le 29/08/2026 ce lien pointait dans le vide après un GC : le lanceur
+# du bureau n'exécutait plus rien, et `--check` répondait « closure complète »
+# sans rien voir — il ne regardait que les racines `gcroot-*`.
 BINS=(
   "build-fx/douze_fx_artefacts/RelWithDebInfo/douze_fx"
   "build-fx/fx/douze_fx_artefacts/RelWithDebInfo/douze_fx"   # selon la disposition CMake
@@ -38,6 +43,14 @@ EXTRA_PATHS=()
 if jack_lib=$(nix eval --raw nixpkgs#pipewire.jack.outPath 2>/dev/null); then
   EXTRA_PATHS+=("$jack_lib")
 fi
+
+# Application de bureau : le lanceur `.desktop` exécute
+# `.gcroots/douze-app/bin/douze-app`. Tester le symlink ne suffit PAS — un lien
+# cassé reste un lien — il faut suivre jusqu'au binaire réellement lancé.
+APP_LINK="$ROOTDIR/douze-app"
+APP_ATTR=".#douze-app"
+app_ok() { [[ -x "$APP_LINK/bin/douze-app" ]]; }
+app_cible() { readlink "$APP_LINK" 2>/dev/null || echo "lien absent"; }
 
 # Closure DIRECTE : bibliothèques résolues (ldd) + interpréteur ELF (le piège :
 # ld-linux n'apparaît pas toujours dans ldd, et c'est LUI qui casse le lancement).
@@ -72,7 +85,12 @@ if [[ $CHECK -eq 1 ]]; then
     done
     [[ $protected -eq 0 ]] && { echo "NON PROTÉGÉ: $p"; missing=1; }
   done
-  [[ $missing -eq 0 ]] && echo "gcroots: closure complète (${#WANT[@]} chemins protégés)."
+  if ! app_ok; then
+    echo "NON PROTÉGÉ: application de bureau ($APP_LINK -> $(app_cible))"
+    missing=1
+  fi
+  [[ $missing -eq 0 ]] && \
+    echo "gcroots: closure complète (${#WANT[@]} chemins protégés + application de bureau)."
   exit $missing
 fi
 
@@ -96,3 +114,19 @@ done
 
 sort -o "$ROOTDIR/closure.txt" "$ROOTDIR/closure.txt" 2>/dev/null
 echo "gcroots: $n chemins protégés dans $ROOTDIR (relancer après chaque rebuild)."
+
+# L'application de bureau ne se « protège » pas après coup : si le GC a emporté
+# son paquet, la seule issue est de le REBÂTIR (`nix build` recrée du même coup
+# la racine enregistrée). Sans réseau ni cache, on échoue en le disant — mieux
+# vaut un code 1 bruyant qu'un lanceur mort découvert un soir de direct.
+if app_ok; then
+  echo "gcroots: application de bureau OK ($(app_cible))."
+else
+  echo "gcroots: application de bureau introuvable ($(app_cible)) -> reconstruction…"
+  if timeout 1800 nix build "$APP_ATTR" --out-link "$APP_LINK" && app_ok; then
+    echo "gcroots: application de bureau reconstruite ($(app_cible))."
+  else
+    echo "gcroots: ÉCHEC — relancer à la main : nix build $APP_ATTR --out-link $APP_LINK" >&2
+    exit 1
+  fi
+fi

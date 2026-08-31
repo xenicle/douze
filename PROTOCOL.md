@@ -271,6 +271,13 @@ INVERT PHASE LEFT, l'appui remonte `invert-l` (sub 05, contrôle 4) et rien
 d'autre — ni `alt`, ni le rang du bouton. C'est ce qui rend `led_group_for()`
 nécessaire : la notification ne dit pas quel bouton a été pressé.
 
+⚠️ **Un bouton portant ALT ne notifie RIEN tant qu'ALT SPK ENABLE est éteint**
+(retour utilisateur du 31/08/2026, boutons par ailleurs tous fonctionnels) : le
+firmware n'a pas de sorties à commuter, il n'émet donc aucun écho sub 05 — et
+la LED reste éteinte, le host n'ayant rien à allumer. Ce n'est pas un défaut du
+host : c'est le prérequis que SSL 360 impose aussi (capture 21, où l'enable est
+activé avant de jouer avec ALT). Exposé depuis dans `sslctl altspk` et la GUI.
+
 Note : le champ « contrôle » semble être un id de fonction **par famille** (les
 booléens sub 04 ont leur numérotation : 1 = 48V, 3 = Line/Inst ; les continus
 sub 06 la leur : 1 = volume canal, 9 = master bus). Les instances indexent
@@ -349,7 +356,7 @@ Acquis de la capture 11 (solo/cut) :
 | AFL | pas de paramètre device : mix principal → -∞ + retour bus (slots 26/27) → 0 dB, puis restauration | aucune | émulation host-side | 20 |
 | Monitoring DIM/CUT/MONO/ØL/ALT | `0x6b` sub 04, contrôles 6/7/5/4/8, instance 0 (+ `0x13` LED pour CUT/ALT) | écho IN sub 05 | booléens u8 | 21 |
 | DIM LEVEL | `0x6b` sub 06, contrôle **3**, instance 0 | aucune | u32 LE gain linéaire std | 21 |
-| ALT SPK ENABLE / TRIM | enable : sub 07 ctrl 5 + ctrl 0x20 (inst 2/3) ; trim : sub 06 ctrl **6** inst 2 | aucune | bool / u32 gain | 21 |
+| ALT SPK ENABLE / TRIM | enable : sub 07 ctrl 5 + ctrl 0x20 (inst 2/3), **les trois dans cet ordre** ; trim : sub 06 ctrl **6** inst 2 | aucune | bool / u32 gain | 21 |
 | Passe-haut / polarité Ø | `0x6b` sub 04, contrôles **2** / **15**, instance = canal | écho IN sub 05 | booléens u8 | 22 |
 | Boutons USER (assignation) | `0x6b` sub 08, contrôle **12**, instance = bouton (0/1/2) | aucune | enum : 0=DIM, 1=CUT, 2=MONO SUM, 3=INVERT PHASE LEFT, 4=ALT, 5=TALKBACK, 6=360° GUI (présumé) — **pas** l'ordre du menu, qui affiche ALT avant INVERT | 23 |
 | Profils (LOAD / APPLY DEFAULTS) | **côté host uniquement** : rejoue l'état complet via les 4 familles connues (~2 100 messages) — aucun stockage device | échos habituels | — | 24 |

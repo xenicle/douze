@@ -16,6 +16,7 @@ Usage (exemples) :
     sslctl.py 48v 1 on / hpf 3 on / inst 3 on / phase 2 off
     sslctl.py loopback pb12 / loopback none
     sslctl.py user cut dim               # réassigne le bouton CUT de la façade
+    sslctl.py altspk on                  # enceintes ALT : sans ça, ALT ne fait rien
     sslctl.py cell 4 8 -10               # accès brut : couche 4, slot 8, -10 dB
     sslctl.py send "ff 01 00 01"         # trame brute (séquences observées !)
 
@@ -103,6 +104,19 @@ def msg_enum(ctrl, inst, value):
 
 def msg_led(group, on):
     return frame(0x13, bytes([0x01, group, 0x00, 1 if on else 0]))
+
+
+def altspk_msgs(on):
+    """ALT SPK ENABLE — les trois trames de la capture 21, dans leur ordre.
+
+    Sans lui, la fonction ALT ne fait **rien** : le firmware n'a pas de sorties
+    à commuter, il n'émet même pas la notification d'appui — donc un bouton de
+    façade assigné à ALT reste muet et éteint. Signalé par un utilisateur le
+    31/08/2026 ; SSL 360 impose la même condition (capture 21 : l'enable est
+    activé avant de pouvoir jouer avec ALT)."""
+    return (msg_bool(5, 2, on, sub=0x07)
+            + msg_bool(0x20, 2, on, sub=0x07)
+            + msg_bool(0x20, 3, on, sub=0x07))
 
 
 def db_to_val(db):
@@ -518,6 +532,8 @@ def cmd_show(_a):
     for btn in USER_BUTTONS:
         fn = ub.get(btn)
         print(f"bouton {btn.upper():5}: {fn or USER_DEFAULT[btn] + '  (défaut)'}")
+    print("enceintes ALT: " + ("activées" if st.get("alt_spk")
+                               else "désactivées  (ALT ne commute rien)"))
 
 
 def cmd_route(a):
@@ -568,6 +584,8 @@ def cmd_sync(_a):
     for bus, g in st.get("masters", {}).items():
         out += msg_gain(9, MASTER_INST[bus], db_to_val(g))
     out += user_msgs(st)
+    if st.get("alt_spk"):
+        out += altspk_msgs(True)
     SSL12().write(out)
     print("état complet renvoyé au device (mix + routes + masters + boutons)")
 
@@ -580,6 +598,16 @@ def cmd_bus(a):
     d.write(msg_bool(BUS_MODE_CTRL[a.mode], MASTER_INST[a.bus], a.state == "on",
                      sub=0x07))
     print(f"bus {a.bus} {a.mode} → {a.state}")
+
+
+def cmd_altspk(a):
+    on = a.state == "on"
+    st = load_state()
+    st["alt_spk"] = on
+    save_state(st)
+    SSL12().write(altspk_msgs(on))
+    print(f"enceintes ALT (sorties 3-4) → {a.state}"
+          + ("" if on else "  — la fonction ALT ne commutera plus rien"))
 
 
 def cmd_loopback(a):
@@ -641,6 +669,10 @@ def main():
         p = sub.add_parser(name, help=f"{name} monitoring on/off")
         p.add_argument("state", choices=("on", "off"))
         p.set_defaults(fn=cmd_bool(name))
+
+    p = sub.add_parser("altspk", help="enceintes ALT (sorties 3-4) : prérequis de ALT")
+    p.add_argument("state", choices=("on", "off"))
+    p.set_defaults(fn=cmd_altspk)
 
     for name in ("48v", "hpf", "inst", "phase"):
         p = sub.add_parser(name, help=f"{name} par canal on/off")

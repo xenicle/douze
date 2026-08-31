@@ -184,6 +184,8 @@ stroke-linecap='round' stroke-linejoin='round'/></svg>");
   .monkey.blue[aria-pressed="true"]  { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   .hw-note { font-size: 11.5px; color: var(--ink-soft); border-top: 1px solid var(--line);
     padding-top: 10px; }
+  .altspk { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px;
+    font-size: 12px; color: var(--ink-soft); }
   .userbtns { display: grid; grid-template-columns: auto 1fr; gap: 7px 10px;
     align-items: center; font-size: 12.5px; color: var(--ink-soft); }
   .userbtns .ublbl { grid-column: 1 / -1; font-size: 11.5px; letter-spacing: .04em;
@@ -454,6 +456,8 @@ stroke-linecap='round' stroke-linejoin='round'/></svg>");
       <span class="lbl">ALT SPK TRIM</span>
       <input id="alttrim" type="range" min="-12" max="12" value="0" step="0.5"
              aria-label="ALT speaker trim">
+      <label class="altspk"><input id="altspk" type="checkbox">
+        <span data-i18n="altspk">Enceintes ALT (sorties 3-4)</span></label>
     </div>
     <div class="big-vol">
       <span class="lbl" data-i18n="hpalbl">Casque A</span>
@@ -482,6 +486,7 @@ const I18N = {
   fr: {sources: "Sources", routing: "Routing — qui sort où", monitoring: "Monitoring",
        monvol: "Volume monitor", hpalbl: "Casque A", hpblbl: "Casque B",
        hint: "Glisser ↑↓ : niveau · Clic : on ↔ off. Colonne Monitor = fader de la tranche ; les autres = sends indépendants.",
+       altspk: "Enceintes ALT (sorties 3-4)",
        userbtns: "Boutons de façade — fonction",
        hwnote: "<b>Synchro façade</b> — les boutons physiques CUT · ALT · TALK remontent ici en direct.",
        connected: "Connectée", disconnected: "Déconnectée", devlost: "Device déconnecté",
@@ -540,6 +545,7 @@ const I18N = {
   en: {sources: "Sources", routing: "Routing — what goes where", monitoring: "Monitoring",
        monvol: "Monitor level", hpalbl: "Headphones A", hpblbl: "Headphones B",
        hint: "Drag ↑↓: level · Click: on ↔ off. Monitor column = the channel fader; the others are independent sends.",
+       altspk: "ALT speakers (outputs 3-4)",
        userbtns: "Front-panel buttons — function",
        hwnote: "<b>Front-panel sync</b> — the hardware CUT · ALT · TALK buttons show up here live.",
        connected: "Connected", disconnected: "Disconnected", devlost: "Device disconnected",
@@ -752,6 +758,7 @@ function refresh(st) {
   const lv = st.monitoring_levels || {};
   if (lv.dimlevel !== undefined) document.getElementById("dimlevel").value = lv.dimlevel;
   if (lv.alttrim !== undefined) document.getElementById("alttrim").value = lv.alttrim;
+  document.getElementById("altspk").checked = !!st.alt_spk;
   if (st._clock) setClock(st._clock);
   if (st._profiles) {
     const sel = document.getElementById("profiles");
@@ -873,6 +880,8 @@ function wire() {
   document.querySelectorAll("[data-user]").forEach(sel =>
     sel.addEventListener("change", e =>
       api({cmd: "user", button: e.target.dataset.user, fn: e.target.value})));
+  document.getElementById("altspk").addEventListener("change", e =>
+    api({cmd: "altspk", on: e.target.checked}));
   for (const [id, cmd] of [["dimlevel", "dimlevel"], ["alttrim", "alttrim"]]) {
     const s = document.getElementById(id); let dt = null;
     s.addEventListener("input", () => {

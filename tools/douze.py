@@ -26,7 +26,7 @@ import usb.util
 import douzefx
 import sslctl
 from sslctl import (BOOL_CTRL, LOOPBACK, MASTER_INST, BUS_LAYERS,
-                    USER_BUTTONS, USER_FN, user_msgs, led_group_for,
+                    USER_BUTTONS, USER_FN, user_msgs, led_group_for, altspk_msgs,
                     CHANNELS, STRIDE, compile_mix, compile_sends, send_cells,
                     db_to_val, default_channel, frame, load_state, msg_bool,
                     msg_enum, msg_gain, msg_get, msg_led, save_state)
@@ -262,6 +262,8 @@ def push_full_state(dev):
     if st.get("loopback"):
         out += msg_enum(11, 0, LOOPBACK[st["loopback"]])
     out += user_msgs(st)
+    if st.get("alt_spk"):
+        out += altspk_msgs(True)
     lv = st.get("monitoring_levels", {})
     if "dimlevel" in lv:
         out += msg_gain(3, 0, db_to_val(lv["dimlevel"]))
@@ -597,6 +599,12 @@ def _apply_cmd(c):
         # SSL 360 : sub 08, contrôle 12, instance = rang du bouton (capture 23)
         DEV.write(msg_enum(12, USER_BUTTONS.index(c["button"]), USER_FN[c["fn"]]))
         st.setdefault("user_buttons", {})[c["button"]] = c["fn"]
+        save_state(st)
+    elif kind == "altspk":
+        # ALT SPK ENABLE (capture 21) : prérequis de la fonction ALT — sans lui
+        # le device n'a rien à commuter et ne notifie même pas l'appui.
+        DEV.write(altspk_msgs(c["on"]))
+        st["alt_spk"] = c["on"]
         save_state(st)
     elif kind == "dimlevel":
         DEV.write(msg_gain(3, 0, db_to_val(c["db"])))

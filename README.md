@@ -35,7 +35,7 @@ The protocol is **mapped and in production use**. Full details in
 |---|---|
 | Framing, handshake, checksums | done |
 | Gain matrix (full map, dB formula) | done |
-| Monitoring: dim / cut / mono / alt / talk, levels | done |
+| Monitoring: dim / cut / mono / alt / talk, levels, ALT speaker enable | done |
 | Preamps: 48V, HPF, inst, polarity | done |
 | Loopback, clock readback, hardware button notifications | done |
 | Front-panel CUT / ALT / TALK: assignable functions | done |
@@ -215,6 +215,7 @@ sslctl route 1 hpa -3               # send channel 1 to headphones A
 sslctl 48v 1 on                     # phantom power, per channel
 sslctl hpf 1 on / inst 3 on / phase 2 on
 sslctl dim on / cut on / mono on / alt on / talk on
+sslctl altspk on                   # ALT speakers — required for `alt` to do anything
 sslctl loopback pb34                # loopback source
 sslctl bus hpa follow                # bus mode: follow mix 1-2 / cut / mono
 sslctl user talk mono-sum           # what a front-panel button does
@@ -248,6 +249,14 @@ does not offer it.
 The assignment is stored with the rest of your mixer state, and pushed back to
 the card by `sslctl sync` and on daemon startup: unplugging the SSL 12 does not
 lose it.
+
+**A button set to `alt` will seem dead until you enable the ALT speakers.** ALT
+switches monitoring over to outputs 3-4, so with those outputs not enabled the
+firmware has nothing to switch to: pressing the button does nothing, and it does
+not even light up — the card sends no notification at all, so Douze has nothing
+to light. Tick *ALT speakers (outputs 3-4)* in the Monitoring panel, or run
+`sslctl altspk on`. SSL 360 has the same prerequisite. This is stored and
+re-pushed like the rest of the state.
 
 ---
 

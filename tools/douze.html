@@ -184,6 +184,12 @@ stroke-linecap='round' stroke-linejoin='round'/></svg>");
   .monkey.blue[aria-pressed="true"]  { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   .hw-note { font-size: 11.5px; color: var(--ink-soft); border-top: 1px solid var(--line);
     padding-top: 10px; }
+  .userbtns { display: grid; grid-template-columns: auto 1fr; gap: 7px 10px;
+    align-items: center; font-size: 12.5px; color: var(--ink-soft); }
+  .userbtns .ublbl { grid-column: 1 / -1; font-size: 11.5px; letter-spacing: .04em;
+    text-transform: uppercase; }
+  .userbtns label { font-weight: 700; color: var(--ink); }
+  .userbtns select { width: 100%; }
   .busmeters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
   .busmeter { display: flex; flex-direction: column; align-items: center; gap: 6px; }
   .busmeter .pair { display: flex; gap: 4px; height: 120px; align-items: stretch; }
@@ -455,6 +461,15 @@ stroke-linecap='round' stroke-linejoin='round'/></svg>");
       <span class="lbl" data-i18n="hpblbl">Casque B</span>
       <input id="hpb" type="range" min="-60" max="12" value="0" step="0.5" aria-label="Casque B">
     </div>
+    <div class="userbtns">
+      <span class="ublbl" data-i18n="userbtns">Boutons de façade — fonction</span>
+      <label for="ub-cut">CUT</label>
+      <select id="ub-cut" data-user="cut"><option value="dim">DIM</option><option value="cut">CUT</option><option value="mono-sum">MONO SUM</option><option value="alt">ALT</option><option value="invert-l">Ø INVERT L</option><option value="talkback">TALKBACK</option></select>
+      <label for="ub-alt">ALT</label>
+      <select id="ub-alt" data-user="alt"><option value="dim">DIM</option><option value="cut">CUT</option><option value="mono-sum">MONO SUM</option><option value="alt">ALT</option><option value="invert-l">Ø INVERT L</option><option value="talkback">TALKBACK</option></select>
+      <label for="ub-talk">TALK</label>
+      <select id="ub-talk" data-user="talk"><option value="dim">DIM</option><option value="cut">CUT</option><option value="mono-sum">MONO SUM</option><option value="alt">ALT</option><option value="invert-l">Ø INVERT L</option><option value="talkback">TALKBACK</option></select>
+    </div>
     <p class="hw-note" data-i18n="hwnote"><b>Synchro façade</b> — les boutons physiques
     CUT · ALT · TALK remontent ici en direct.</p>
   </section>
@@ -467,6 +482,7 @@ const I18N = {
   fr: {sources: "Sources", routing: "Routing — qui sort où", monitoring: "Monitoring",
        monvol: "Volume monitor", hpalbl: "Casque A", hpblbl: "Casque B",
        hint: "Glisser ↑↓ : niveau · Clic : on ↔ off. Colonne Monitor = fader de la tranche ; les autres = sends indépendants.",
+       userbtns: "Boutons de façade — fonction",
        hwnote: "<b>Synchro façade</b> — les boutons physiques CUT · ALT · TALK remontent ici en direct.",
        connected: "Connectée", disconnected: "Déconnectée", devlost: "Device déconnecté",
        theme_light: "Clair", theme_dark: "Sombre",
@@ -524,6 +540,7 @@ const I18N = {
   en: {sources: "Sources", routing: "Routing — what goes where", monitoring: "Monitoring",
        monvol: "Monitor level", hpalbl: "Headphones A", hpblbl: "Headphones B",
        hint: "Drag ↑↓: level · Click: on ↔ off. Monitor column = the channel fader; the others are independent sends.",
+       userbtns: "Front-panel buttons — function",
        hwnote: "<b>Front-panel sync</b> — the hardware CUT · ALT · TALK buttons show up here live.",
        connected: "Connected", disconnected: "Disconnected", devlost: "Device disconnected",
        theme_light: "Light", theme_dark: "Dark",
@@ -729,6 +746,9 @@ function refresh(st) {
   if ((st.masters || {})["hp-b"] !== undefined && st.masters["hp-b"] !== "off")
     document.getElementById("hpb").value = st.masters["hp-b"];
   if (st.loopback) document.getElementById("lb").value = st.loopback;
+  const ub = st.user_buttons || {};
+  for (const [b, dflt] of [["cut", "cut"], ["alt", "alt"], ["talk", "talkback"]])
+    document.getElementById("ub-" + b).value = ub[b] || dflt;
   const lv = st.monitoring_levels || {};
   if (lv.dimlevel !== undefined) document.getElementById("dimlevel").value = lv.dimlevel;
   if (lv.alttrim !== undefined) document.getElementById("alttrim").value = lv.alttrim;
@@ -850,6 +870,9 @@ function wire() {
   }
   document.getElementById("lb").addEventListener("change", e =>
     api({cmd: "loopback", source: e.target.value}));
+  document.querySelectorAll("[data-user]").forEach(sel =>
+    sel.addEventListener("change", e =>
+      api({cmd: "user", button: e.target.dataset.user, fn: e.target.value})));
   for (const [id, cmd] of [["dimlevel", "dimlevel"], ["alttrim", "alttrim"]]) {
     const s = document.getElementById(id); let dt = null;
     s.addEventListener("input", () => {

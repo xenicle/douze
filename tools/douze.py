@@ -25,7 +25,8 @@ import usb.util
 
 import douzefx
 import sslctl
-from sslctl import (BOOL_CTRL, LED_GROUP, LOOPBACK, MASTER_INST, BUS_LAYERS,
+from sslctl import (BOOL_CTRL, LOOPBACK, MASTER_INST, BUS_LAYERS,
+                    USER_BUTTONS, USER_FN, user_msgs, led_group_for,
                     CHANNELS, STRIDE, compile_mix, compile_sends, send_cells,
                     db_to_val, default_channel, frame, load_state, msg_bool,
                     msg_enum, msg_gain, msg_get, msg_led, save_state)
@@ -228,9 +229,12 @@ class Device(threading.Thread):
                 if inst == 0 and name in ("dim", "cut", "mono", "invert-l",
                                           "alt", "talk"):
                     st.setdefault("monitoring", {})[name] = val
-                    # boutons physiques : le host doit rallumer la LED (17b)
-                    if name in LED_GROUP:
-                        self.write(msg_led(LED_GROUP[name], val))
+                    # boutons physiques : le host doit rallumer la LED (17b) —
+                    # celle du bouton qui porte cette fonction, pas celle qui
+                    # porte ce nom (elles diffèrent dès qu'on réassigne)
+                    grp = led_group_for(st, name)
+                    if grp is not None:
+                        self.write(msg_led(grp, val))
                 else:
                     st.setdefault("preamp", {}).setdefault(name, {})[str(inst)] = val
                 save_state(st)
@@ -248,14 +252,16 @@ def push_full_state(dev):
     for name, on in st.get("monitoring", {}).items():
         if name in BOOL_CTRL and name != "talk":   # talk = momentané, pas restauré
             out += msg_bool(BOOL_CTRL[name], 0, on)
-            if name in LED_GROUP:
-                out += msg_led(LED_GROUP[name], on)
+            grp = led_group_for(st, name)
+            if grp is not None:
+                out += msg_led(grp, on)
     for name, insts in st.get("preamp", {}).items():
         if name in BOOL_CTRL:
             for inst, on in insts.items():
                 out += msg_bool(BOOL_CTRL[name], int(inst), on)
     if st.get("loopback"):
         out += msg_enum(11, 0, LOOPBACK[st["loopback"]])
+    out += user_msgs(st)
     lv = st.get("monitoring_levels", {})
     if "dimlevel" in lv:
         out += msg_gain(3, 0, db_to_val(lv["dimlevel"]))
@@ -572,8 +578,9 @@ def _apply_cmd(c):
     elif kind == "mon":
         name, on = c["name"], c["on"]
         out = msg_bool(BOOL_CTRL[name], 0, on)
-        if name in LED_GROUP:
-            out += msg_led(LED_GROUP[name], on)
+        grp = led_group_for(st, name)
+        if grp is not None:
+            out += msg_led(grp, on)
         DEV.write(out)
         st.setdefault("monitoring", {})[name] = on
         save_state(st)
@@ -584,6 +591,12 @@ def _apply_cmd(c):
     elif kind == "loopback":
         DEV.write(msg_enum(11, 0, LOOPBACK[c["source"]]))
         st["loopback"] = c["source"]
+        save_state(st)
+    elif kind == "user":
+        # assignation d'un bouton de façade (CUT / ALT / TALK), page USER de
+        # SSL 360 : sub 08, contrôle 12, instance = rang du bouton (capture 23)
+        DEV.write(msg_enum(12, USER_BUTTONS.index(c["button"]), USER_FN[c["fn"]]))
+        st.setdefault("user_buttons", {})[c["button"]] = c["fn"]
         save_state(st)
     elif kind == "dimlevel":
         DEV.write(msg_gain(3, 0, db_to_val(c["db"])))

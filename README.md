@@ -38,6 +38,7 @@ The protocol is **mapped and in production use**. Full details in
 | Monitoring: dim / cut / mono / alt / talk, levels | done |
 | Preamps: 48V, HPF, inst, polarity | done |
 | Loopback, clock readback, hardware button notifications | done |
+| Front-panel CUT / ALT / TALK: assignable functions | done |
 | Logical mixer: faders, pans, mutes, solos, profiles | done (emulated) |
 | A few SETTINGS/clock controls | identified, not decoded |
 
@@ -216,7 +217,7 @@ sslctl hpf 1 on / inst 3 on / phase 2 on
 sslctl dim on / cut on / mono on / alt on / talk on
 sslctl loopback pb34                # loopback source
 sslctl bus hpa follow                # bus mode: follow mix 1-2 / cut / mono
-sslctl user 1 talkback              # reassign a USER button
+sslctl user talk mono-sum           # what a front-panel button does
 ```
 
 `sslctl --help` lists everything. For key bindings, use relative moves:
@@ -224,6 +225,29 @@ sslctl user 1 talkback              # reassign a USER button
 
 `sslctl sync` pushes the whole logical state back to the card — useful after a
 power cycle, since the device starts blank.
+
+### Reassigning the CUT / ALT / TALK buttons
+
+The three buttons on the front panel are assignable, exactly like the USER page
+of SSL 360. Pick the function in the GUI, at the bottom of the Monitoring panel
+— or from the CLI:
+
+```bash
+sslctl user cut  mono-sum     # the CUT button now sums the monitor bus to mono
+sslctl user alt  dim
+sslctl user talk talkback     # back to its factory function
+```
+
+The button is `cut`, `alt` or `talk` (where it sits on the panel — `1`, `2`,
+`3` still work), and the function is one of `dim`, `cut`, `mono-sum`, `alt`,
+`invert-l`, `talkback`. A seventh function exists in SSL 360, "360° GUI", which
+opens the SSL 360 window; it is `gui` here, but it has nothing to open on Linux
+and its value is the one part of the menu we never saw on the wire — so the GUI
+does not offer it.
+
+The assignment is stored with the rest of your mixer state, and pushed back to
+the card by `sslctl sync` and on daemon startup: unplugging the SSL 12 does not
+lose it.
 
 ---
 

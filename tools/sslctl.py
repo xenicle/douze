@@ -15,7 +15,7 @@ Usage (exemples) :
     sslctl.py dim on / cut off / mono on / invert-l off / alt on / talk on
     sslctl.py 48v 1 on / hpf 3 on / inst 3 on / phase 2 off
     sslctl.py loopback pb12 / loopback none
-    sslctl.py user 1 dim                 # assigne le bouton USER 1
+    sslctl.py user cut dim               # réassigne le bouton CUT de la façade
     sslctl.py cell 4 8 -10               # accès brut : couche 4, slot 8, -10 dB
     sslctl.py send "ff 01 00 01"         # trame brute (séquences observées !)
 
@@ -47,6 +47,16 @@ LOOPBACK = {"none": 0, "pb12": 1, "pb34": 2, "pb56": 3, "pb78": 4,
             "monitor": 5, "line34": 6, "hpa": 7, "hpb": 8}
 USER_FN = {"dim": 0, "cut": 1, "mono-sum": 2, "alt": 3, "invert-l": 4,
            "talkback": 5, "gui": 6}
+# Instances du contrôle 12 = les trois boutons de la façade, dans l'ordre du
+# menu USER de SSL 360. Les défauts d'usine relevés en capture 23 sont
+# justement les fonctions homonymes (CUT / ALT / TALKBACK).
+USER_BUTTONS = ("cut", "alt", "talk")
+USER_DEFAULT = {"cut": "cut", "alt": "alt", "talk": "talkback"}
+# Fonction USER → nom du contrôle booléen qu'elle actionne (BOOL_CTRL). Sert à
+# savoir QUELLE LED de façade allumer : `LED_GROUP` est indexé par bouton, ce
+# qui ne coïncide avec la fonction que dans la configuration d'usine.
+USER_FN_CTRL = {"dim": "dim", "cut": "cut", "mono-sum": "mono", "alt": "alt",
+                "invert-l": "invert-l", "talkback": "talk"}   # "gui" : rien à allumer
 # Slots sources de la matrice (canaux mono Analogue 1-4)
 ANALOGUE_SLOT = {1: 8, 2: 9, 3: 10, 4: 11}
 # Paires de couches (L, R) par bus — carte complète (PROTOCOL.md)
@@ -499,6 +509,10 @@ def cmd_show(_a):
             print(f"route {ch} → {bus} : {level}")
     for bus, g in st.get("masters", {}).items():
         print(f"master {bus} : {g}")
+    ub = st.get("user_buttons", {})
+    for btn in USER_BUTTONS:
+        fn = ub.get(btn)
+        print(f"bouton {btn.upper():5}: {fn or USER_DEFAULT[btn] + '  (défaut)'}")
 
 
 def cmd_route(a):
@@ -514,14 +528,43 @@ def cmd_route(a):
     print(f"route {a.ch} → {a.bus} : {a.level}")
 
 
+def user_msgs(st):
+    """Assignations des boutons de façade → trames.
+
+    Renvoyées avec les faders par `sync` et au démarrage du démon. On n'a pas
+    vérifié si le device retient ces trois-là au débranchement (il oublie tout
+    le reste) ; les réémettre est sans effet s'il les avait gardées, et évite
+    une assignation perdue en silence s'il ne les garde pas."""
+    ub = st.get("user_buttons", {})
+    return b"".join(msg_enum(12, i, USER_FN[ub[b]])
+                    for i, b in enumerate(USER_BUTTONS)
+                    if ub.get(b) in USER_FN)
+
+
+def led_group_for(st, name):
+    """Groupe LED du bouton de façade qui porte la fonction `name`, ou None.
+
+    Le device notifie la FONCTION appliquée, pas le bouton pressé — c'est déjà
+    ce qu'on observe avec TALK, qui remonte aussi DIM (auto-dim firmware,
+    capture 17b). Un bouton réassigné doit donc voir sa LED suivre sa nouvelle
+    fonction, sinon il reste éteint sous le doigt. Sans réassignation, le
+    résultat est identique à `LED_GROUP[name]`."""
+    ub = st.get("user_buttons", {})
+    for btn in USER_BUTTONS:
+        if USER_FN_CTRL.get(ub.get(btn, USER_DEFAULT[btn])) == name:
+            return LED_GROUP[btn]
+    return None
+
+
 def cmd_sync(_a):
     st = load_state()
     out = b"".join(msg_gain(1, i, v) for i, v in compile_mix(st))
     out += b"".join(msg_gain(1, i, v) for i, v in compile_sends(st))
     for bus, g in st.get("masters", {}).items():
         out += msg_gain(9, MASTER_INST[bus], db_to_val(g))
+    out += user_msgs(st)
     SSL12().write(out)
-    print("état complet renvoyé au device (mix + routes + masters)")
+    print("état complet renvoyé au device (mix + routes + masters + boutons)")
 
 
 BUS_MODE_CTRL = {"mono": 2, "cut": 4, "follow": 7}   # sub 07 (capture 20)
@@ -541,9 +584,15 @@ def cmd_loopback(a):
 
 
 def cmd_user(a):
+    # « 1/2/3 » reste accepté (c'était la seule forme en v1), mais nommer le
+    # bouton est plus sûr : rien sur la façade ne les numérote.
+    btn = USER_BUTTONS[int(a.button) - 1] if a.button.isdigit() else a.button
+    st = load_state()
+    st.setdefault("user_buttons", {})[btn] = a.fn
+    save_state(st)
     d = SSL12()
-    d.write(msg_enum(12, a.button - 1, USER_FN[a.fn]))
-    print(f"bouton USER {a.button} → {a.fn}")
+    d.write(msg_enum(12, USER_BUTTONS.index(btn), USER_FN[a.fn]))
+    print(f"bouton {btn.upper()} → {a.fn}")
 
 
 def main():
@@ -637,8 +686,8 @@ def main():
     p.add_argument("source", choices=LOOPBACK)
     p.set_defaults(fn=cmd_loopback)
 
-    p = sub.add_parser("user", help="assignation des boutons USER")
-    p.add_argument("button", type=int, choices=(1, 2, 3))
+    p = sub.add_parser("user", help="assignation des boutons de façade")
+    p.add_argument("button", choices=USER_BUTTONS + ("1", "2", "3"))
     p.add_argument("fn", choices=USER_FN)
     p.set_defaults(fn=cmd_user)
 

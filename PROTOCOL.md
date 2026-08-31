@@ -256,6 +256,16 @@ L'opcode `0x13` (payload `01 groupe état`) double certains booléens : CUT →
 groupe 0x0c, ALT → groupe 0x0d — vraisemblablement les **LED des boutons
 physiques** (les 36 messages `0x13` de l'init = synchro complète des LED/HW).
 
+Les groupes LED sont donc indexés par **bouton de façade** (0x0c = CUT,
+0x0d = ALT, 0x0e = TALK), pas par fonction — ça ne se voit pas tant que les
+boutons portent leur fonction d'usine. Sur un bouton réassigné (sub 08
+contrôle 12, cf. ci-dessous), le host doit allumer la LED du bouton qui porte
+la fonction notifiée : `sslctl.led_group_for()`. **Non vérifié sur le
+matériel** — repose sur le fait que le device notifie la fonction appliquée et
+non le bouton pressé, ce que montre déjà TALK (il remonte aussi DIM, capture
+17b). Si un bouton réassigné reste éteint sous le doigt, c'est ici qu'il faut
+capturer.
+
 Note : le champ « contrôle » semble être un id de fonction **par famille** (les
 booléens sub 04 ont leur numérotation : 1 = 48V, 3 = Line/Inst ; les continus
 sub 06 la leur : 1 = volume canal, 9 = master bus). Les instances indexent

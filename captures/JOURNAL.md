@@ -248,7 +248,14 @@
 - Réassignation des 3 boutons USER, un à la fois (menu : DIM, CUT, MONO SUM,
   ALT, INVERT PHASE LEFT, TALKBACK, 360° SSL12 GUI).
 - Résultat : sub 08, contrôle **12**, instance = bouton (0/1/2), valeur =
-  fonction dans l'ordre du menu (0–5 observés). Défauts : CUT/ALT/TALKBACK.
+  fonction (0–5 observés). Défauts : CUT/ALT/TALKBACK.
+- **Correction du 31/08/2026** : la valeur n'est *pas* le rang dans le menu.
+  Les six réassignations, prises dans l'ordre du menu, sortent
+  `0, 1, 2, 4, 3, 5` — ALT et INVERT PHASE LEFT sont échangés sur le fil.
+  L'entrée d'origine avait lu ces valeurs comme si elles étaient croissantes.
+  Confirmé à l'oreille par un utilisateur : la valeur 3 inverse la phase du
+  canal gauche. Ordre réel : 0=DIM, 1=CUT, 2=MONO SUM, 3=INVERT PHASE LEFT,
+  4=ALT, 5=TALKBACK.
 - Brut supprimé (37 780 trames dans le .ctl).
 
 ### 22-hpf-phase-(analogue 3).ctl.pcapng

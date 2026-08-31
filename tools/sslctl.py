@@ -45,11 +45,16 @@ LED_GROUP = {"cut": 0x0C, "alt": 0x0D, "talk": 0x0E}   # LED pilotées par le ho
 MASTER_INST = {"monitor": 0, "line34": 2, "hp-a": 4, "hp-b": 6}
 LOOPBACK = {"none": 0, "pb12": 1, "pb34": 2, "pb56": 3, "pb78": 4,
             "monitor": 5, "line34": 6, "hpa": 7, "hpb": 8}
-USER_FN = {"dim": 0, "cut": 1, "mono-sum": 2, "alt": 3, "invert-l": 4,
+# Fonction USER → valeur sur le fil. Ce n'est **pas** l'ordre du menu de SSL 360
+# (DIM, CUT, MONO SUM, ALT, INVERT PHASE LEFT, TALKBACK) : ALT et INVERT PHASE
+# LEFT y sont échangés. La capture 23 le disait déjà — six réassignations prises
+# dans l'ordre du menu sortent 0, 1, 2, 4, 3, 5 — et un utilisateur l'a confirmé
+# à l'oreille le 31/08/2026 : la valeur 3 inverse la phase du canal gauche.
+USER_FN = {"dim": 0, "cut": 1, "mono-sum": 2, "invert-l": 3, "alt": 4,
            "talkback": 5, "gui": 6}
-# Instances du contrôle 12 = les trois boutons de la façade, dans l'ordre du
-# menu USER de SSL 360. Les défauts d'usine relevés en capture 23 sont
-# justement les fonctions homonymes (CUT / ALT / TALKBACK).
+# Instances du contrôle 12 = les trois boutons de la façade, de gauche à droite.
+# Les défauts d'usine relevés en capture 23 sont justement les fonctions
+# homonymes (CUT / ALT / TALKBACK).
 USER_BUTTONS = ("cut", "alt", "talk")
 USER_DEFAULT = {"cut": "cut", "alt": "alt", "talk": "talkback"}
 # Fonction USER → nom du contrôle booléen qu'elle actionne (BOOL_CTRL). Sert à

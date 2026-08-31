@@ -260,11 +260,11 @@ Les groupes LED sont donc indexés par **bouton de façade** (0x0c = CUT,
 0x0d = ALT, 0x0e = TALK), pas par fonction — ça ne se voit pas tant que les
 boutons portent leur fonction d'usine. Sur un bouton réassigné (sub 08
 contrôle 12, cf. ci-dessous), le host doit allumer la LED du bouton qui porte
-la fonction notifiée : `sslctl.led_group_for()`. **Non vérifié sur le
-matériel** — repose sur le fait que le device notifie la fonction appliquée et
-non le bouton pressé, ce que montre déjà TALK (il remonte aussi DIM, capture
-17b). Si un bouton réassigné reste éteint sous le doigt, c'est ici qu'il faut
-capturer.
+la fonction notifiée : `sslctl.led_group_for()`. **Vérifié sur le matériel** le
+31/08/2026 (retour d'un utilisateur avec boutons réassignés : chaque LED
+s'allume bien sous le bouton pressé), ce qui confirme que le device notifie la
+fonction appliquée et non le bouton — comme le montrait déjà TALK, qui remonte
+aussi DIM (capture 17b).
 
 Note : le champ « contrôle » semble être un id de fonction **par famille** (les
 booléens sub 04 ont leur numérotation : 1 = 48V, 3 = Line/Inst ; les continus
@@ -346,5 +346,5 @@ Acquis de la capture 11 (solo/cut) :
 | DIM LEVEL | `0x6b` sub 06, contrôle **3**, instance 0 | aucune | u32 LE gain linéaire std | 21 |
 | ALT SPK ENABLE / TRIM | enable : sub 07 ctrl 5 + ctrl 0x20 (inst 2/3) ; trim : sub 06 ctrl **6** inst 2 | aucune | bool / u32 gain | 21 |
 | Passe-haut / polarité Ø | `0x6b` sub 04, contrôles **2** / **15**, instance = canal | écho IN sub 05 | booléens u8 | 22 |
-| Boutons USER (assignation) | `0x6b` sub 08, contrôle **12**, instance = bouton (0/1/2) | aucune | enum : 0=DIM, 1=CUT, 2=MONO SUM, 3=ALT, 4=INVERT PHASE LEFT, 5=TALKBACK, 6=360° GUI (présumé) | 23 |
+| Boutons USER (assignation) | `0x6b` sub 08, contrôle **12**, instance = bouton (0/1/2) | aucune | enum : 0=DIM, 1=CUT, 2=MONO SUM, 3=INVERT PHASE LEFT, 4=ALT, 5=TALKBACK, 6=360° GUI (présumé) — **pas** l'ordre du menu, qui affiche ALT avant INVERT | 23 |
 | Profils (LOAD / APPLY DEFAULTS) | **côté host uniquement** : rejoue l'état complet via les 4 familles connues (~2 100 messages) — aucun stockage device | échos habituels | — | 24 |

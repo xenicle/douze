@@ -266,6 +266,11 @@ s'allume bien sous le bouton pressé), ce qui confirme que le device notifie la
 fonction appliquée et non le bouton — comme le montrait déjà TALK, qui remonte
 aussi DIM (capture 17b).
 
+Reproduit le même jour sur la carte de référence : bouton ALT réassigné en
+INVERT PHASE LEFT, l'appui remonte `invert-l` (sub 05, contrôle 4) et rien
+d'autre — ni `alt`, ni le rang du bouton. C'est ce qui rend `led_group_for()`
+nécessaire : la notification ne dit pas quel bouton a été pressé.
+
 Note : le champ « contrôle » semble être un id de fonction **par famille** (les
 booléens sub 04 ont leur numérotation : 1 = 48V, 3 = Line/Inst ; les continus
 sub 06 la leur : 1 = volume canal, 9 = master bus). Les instances indexent

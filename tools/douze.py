@@ -373,9 +373,12 @@ def fx_cmd(c):
         return douzefx.graph_settings()
 
     if kind == "set_graph":
-        # Réglage GLOBAL du graphe : toutes les applis audio suivent.
-        douzefx.set_graph(quantum=c.get("quantum"), rate=c.get("rate"))
-        return douzefx.graph_settings()
+        # Réglage GLOBAL du graphe : toutes les applis audio suivent. Passe par
+        # le superviseur, pas par `douzefx.ecrire_horloge` : les bandes en marche
+        # doivent être relancées derrière, sans quoi celles qui portent un plugin
+        # qui ne survit pas au changement de bloc deviennent muettes en silence
+        # (cf. `Supervisor.set_graph`).
+        return FX.set_graph(quantum=c.get("quantum"), rate=c.get("rate"))
 
     if kind == "add":
         sid = FX.add_strip(c.get("strip") or {})

@@ -213,6 +213,8 @@ stroke-linecap='round' stroke-linejoin='round'/></svg>");
     padding: 9px 12px; margin-bottom: 12px; font-size: 12.5px; }
   .fxgraph .lbl { margin-right: -4px; }
   .fxgraph .note { color: var(--ink-soft); font-size: 11.5px; flex-basis: 100%; }
+  .fxgraph .note.warn { color: var(--amber); }
+  .fxgraph .note.err  { color: var(--alert); }
   .fxband { border: 1px solid var(--line); border-radius: 11px; background: var(--panel-2);
     padding: 11px 13px 12px; display: grid; gap: 10px; margin-bottom: 10px; }
   .fxband.off { opacity: .62; }
@@ -540,6 +542,8 @@ const I18N = {
        fxsave: "Enregistrer", fxsaved: "Enregistré ✓", fxleft: "Déplacer avant", fxright: "Déplacer après",
        fxgraph: "Horloge du graphe", fxblocklbl: "Bloc", fxratelbl: "Taux", fxauto: "Laisser PipeWire décider",
        fxdevnote: "Réglage GLOBAL : toutes les applis audio suivent. La période ALSA de %d suit le bloc (%p actuellement), donc baisser le bloc baisse vraiment la latence — jusqu'à ce que les underruns apparaissent.",
+       fxgrestart: "Bandes relancées après le changement : %s. Un changement de bloc à chaud rend muets certains plugins (Clear) sans rien dire — la relance est le seul moyen sûr.",
+       fxgrestartko: "Horloge changée, mais des bandes n'ont PAS pu être relancées — leur son est peut-être coupé :",
        fxdelask: "Supprimer la bande « %s » ?",
        fxnhint: "La source et la destination se posent au lancement de la bande : les changer sur une bande en marche la relance."},
   en: {sources: "Sources", routing: "Routing — what goes where", monitoring: "Monitoring",
@@ -597,6 +601,8 @@ const I18N = {
        fxsave: "Save", fxsaved: "Saved ✓", fxleft: "Move earlier", fxright: "Move later",
        fxgraph: "Graph clock", fxblocklbl: "Block", fxratelbl: "Rate", fxauto: "Let PipeWire decide",
        fxdevnote: "GLOBAL setting: every audio app follows. The ALSA period of %d tracks the block (%p right now), so lowering the block really lowers latency — until underruns show up.",
+       fxgrestart: "Strips restarted after the change: %s. Changing the block size on the fly silences some plugins (Clear) without a word — restarting is the only safe answer.",
+       fxgrestartko: "Clock changed, but some strips could NOT be restarted — their audio may be dead:",
        fxdelask: "Delete strip “%s”?",
        fxnhint: "Source and destination are set when the strip starts: changing them on a running strip restarts it."},
 };
@@ -1459,9 +1465,28 @@ const fxRefresh = () => { FXSIG = ""; fxProfRefresh(); return fxTick(); };
 // toute demande d'une bande est ignorée. Il est GLOBAL — toutes les applis
 // audio de la machine suivent — d'où l'avertissement affiché.
 
+// Avis transitoire après un changement d'horloge. La relance des bandes coupe
+// le son quelques secondes : sans un mot, ça passe pour une panne. Même motif
+// que les `notice` ambre des bandes — visible, pas bloquant.
+let FXGAVIS = null, FXGAVIS_T = 0;
+const FXGAVIS_MS = 20000;
+
 function fxGraphRender(g) {
   const box = document.getElementById("fxgraph");
   if (!g || !g.rate) { box.textContent = ""; return; }
+
+  // `restarted`/`failed` n'arrivent qu'en réponse à un set_graph ; les relectures
+  // périodiques ne les portent pas et ne doivent donc pas effacer l'avis.
+  if (g.restarted || g.failed) {
+    const ok = g.restarted || [], ko = g.failed || [];
+    FXGAVIS = ko.length ? {err: true, txt: T("fxgrestartko") + " " + ko.join(" ; ")}
+            : ok.length ? {err: false, txt: T("fxgrestart").replace("%s", ok.join(", "))}
+            : null;
+    FXGAVIS_T = Date.now();
+    // Une bande muette ne se remarque pas en regardant l'écran : on interrompt.
+    if (ko.length) alert(FXGAVIS.txt);
+  }
+  const avis = (FXGAVIS && Date.now() - FXGAVIS_T < FXGAVIS_MS) ? FXGAVIS : null;
 
   const ms = q => (q / g.rate * 1000).toFixed(1);
   const quanta = [64, 128, 256, 512, 1024, 2048]
@@ -1475,7 +1500,8 @@ function fxGraphRender(g) {
     (g.device_period
       ? `<span class="note">${T("fxdevnote")
            .replace("%d", g.device)
-           .replace("%p", g.device_period)}</span>` : "");
+           .replace("%p", g.device_period)}</span>` : "") +
+    (avis ? `<span class="note ${avis.err ? "err" : "warn"}">${esc(avis.txt)}</span>` : "");
 
   const q = box.querySelector("#fxgq"), r = box.querySelector("#fxgr");
   for (const v of quanta) {

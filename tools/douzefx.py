@@ -527,6 +527,28 @@ def _name_from_path(path):
 PW_METADATA = shutil.which("pw-metadata") or "/run/current-system/sw/bin/pw-metadata"
 
 
+def _clock_vals():
+    """Les réglages d'horloge bruts, sans le `pw-dump` de `graph_settings`.
+
+    Séparé parce qu'on doit pouvoir RELIRE l'horloge en boucle (le temps que
+    PipeWire prenne un changement) : `graph_settings` sérialise tout le graphe,
+    ça n'a pas sa place dans une attente."""
+    try:
+        out = subprocess.run([PW_METADATA, "-n", "settings"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    return dict(re.findall(r"key:'([^']+)' value:'([^']*)'", out))
+
+
+def _clock_effectif(vals=None):
+    """Le quantum et le taux qui tournent VRAIMENT (forçage compris)."""
+    vals = _clock_vals() if vals is None else vals
+    num = lambda k: int(vals.get(k, "0") or 0)
+    return (num("clock.force-quantum") or num("clock.quantum"),
+            num("clock.force-rate") or num("clock.rate"))
+
+
 def graph_settings():
     """Réglages d'horloge du graphe PipeWire (quantum et taux d'échantillonnage).
 
@@ -535,13 +557,9 @@ def graph_settings():
     C'est le levier que prennent les DAW : tant qu'un force-quantum est posé,
     toute demande d'une bande est ignorée — d'où des « 256 demandé, 1024 obtenu »
     inexplicables autrement."""
-    try:
-        out = subprocess.run([PW_METADATA, "-n", "settings"],
-                             capture_output=True, text=True, timeout=5).stdout
-    except (OSError, subprocess.TimeoutExpired):
+    vals = _clock_vals()
+    if not vals:
         return {}
-
-    vals = dict(re.findall(r"key:'([^']+)' value:'([^']*)'", out))
     num = lambda k: int(vals.get(k, "0") or 0)
     rates = [int(r) for r in re.findall(r"\d+", vals.get("clock.allowed-rates", ""))]
 
@@ -586,12 +604,15 @@ def _device_period():
     return {}
 
 
-def set_graph(quantum=None, rate=None):
+def ecrire_horloge(quantum=None, rate=None):
     """Impose (ou relâche, avec 0) le quantum et/ou le taux du graphe.
 
     ⚠️ C'est GLOBAL : toutes les applications audio de la machine suivent.
     Descendre le quantum réduit la latence de tout le monde et augmente la
-    charge ; changer le taux fait renégocier chaque nœud."""
+    charge ; changer le taux fait renégocier chaque nœud.
+
+    ⚠️ Écrit SEULEMENT le réglage. Passer par `Supervisor.set_graph` : les
+    bandes en marche doivent être relancées derrière (voir là-bas)."""
     done = {}
     for key, val in (("clock.force-quantum", quantum), ("clock.force-rate", rate)):
         if val is None:
@@ -1945,6 +1966,71 @@ class Supervisor:
         # il doit se sérialiser avec les autres comme n'importe quel démarrage.
         ok, msg = self._serialise("recâblage", relance)
         return {"updated": True, "restarted": bool(ok), "msg": msg}
+
+
+    # Temps laissé à PipeWire pour prendre le nouveau réglage avant de conclure
+    # que rien n'a bougé. Poser un forçage est immédiat ; le RELÂCHER (0) lance
+    # une re-négociation qui prend un instant.
+    GRAPH_SETTLE = 2.5
+
+    def _horloge_stabilisee(self, avant):
+        fin = time.time() + self.GRAPH_SETTLE
+        apres = _clock_effectif()
+        while apres == avant and time.time() < fin:
+            time.sleep(0.2)
+            apres = _clock_effectif()
+        return apres
+
+    def set_graph(self, quantum=None, rate=None):
+        """Change l'horloge du graphe, puis RELANCE les bandes qui tournaient.
+
+        Une bande en marche reçoit la nouvelle taille de bloc à chaud, et tous
+        les plugins n'y survivent pas. Clear (VST3 sous yabridge) se tait
+        DÉFINITIVEMENT, sans rien signaler : le process vit, chaque étage se
+        déclare `loaded`, le `sampleRate` est bon — mais le temps de calcul
+        s'effondre (119 µs → 1,3 µs) et la sortie tombe à -140 dBFS pendant que
+        l'entrée reçoit du signal. Vécu le 01/09/2026, en réparant justement les
+        décrochages dus au quantum de 64 que Clear impose au graphe.
+
+        Aucun des garde-fous de `supervise()` ne l'attrape : le process est
+        vivant, le nœud virtuel est là, le `sampleRate` n'est pas retombé à 0.
+        Et le réglage est offert dans la GUI — l'utilisateur se coupait le micro
+        d'un menu déroulant, sans un mot.
+
+        On ne sait pas dire à l'avance quel plugin encaisse et lequel lâche
+        (KStrip a survécu au même changement), donc on relance tout ce qui
+        tournait. Rien n'est relancé si l'horloge n'a pas bougé : couper le son
+        pour un réglage redemandé à l'identique serait pire que le mal."""
+        avant = _clock_effectif()
+        ecrire_horloge(quantum=quantum, rate=rate)
+        apres = self._horloge_stabilisee(avant)
+        etat = graph_settings()
+
+        vivantes = [s for s in self.strips.values() if s.alive()]
+        if apres == avant or not vivantes:
+            return dict(etat, restarted=[], failed=[])
+
+        bilan = {"ok": [], "ko": []}
+
+        def relance():
+            for s in vivantes:
+                s.stop()
+                bien, msg = s.start()
+                if bien:
+                    bilan["ok"].append(s.id)
+                else:
+                    bilan["ko"].append(f"{s.id} : {msg}")
+            return not bilan["ko"], ""
+
+        # Même verrou que les autres démarrages : une relance en série ne doit
+        # pas croiser un `start` venu de la GUI.
+        ok, msg = self._serialise("changement d'horloge", relance)
+        if not ok and not bilan["ko"] and msg:
+            # Verrou occupé : le réglage est passé, les bandes N'ONT PAS été
+            # relancées. Le dire, sinon l'utilisateur repart avec des bandes
+            # muettes et un réglage qui a l'air d'avoir marché.
+            bilan["ko"].append(msg)
+        return dict(etat, restarted=bilan["ok"], failed=bilan["ko"])
 
 
 # ---------------------------------------------------------------------- CLI

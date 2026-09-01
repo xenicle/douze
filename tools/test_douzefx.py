@@ -666,6 +666,83 @@ def test_veille_pipewire(tmp):
             "arrêt manuel : budget et renoncement remis à zéro")
 
 
+def test_horloge_relance(tmp):
+    print("[test] horloge du graphe : relance des bandes en marche")
+    import douzefx
+
+    douzefx.CONFIG_DIR = tmp
+    douzefx.STRIPS_PATH = os.path.join(tmp, "horloge-strips.json")
+    douzefx.LOG_DIR = tmp
+    with open(douzefx.STRIPS_PATH, "w") as f:
+        json.dump({"strips": [{"id": "h", "name": "H", "rack": "",
+                               "source": {}, "dest": {}}]}, f)
+
+    sup = douzefx.Supervisor()
+    sup.GRAPH_SETTLE = 0.1          # rien à attendre : PipeWire est simulé
+    s = sup.strips["h"]
+
+    # PipeWire tient dans deux variables : ce qu'on lui écrit, ce qui tourne.
+    vrai = (douzefx.ecrire_horloge, douzefx._clock_effectif, douzefx.graph_settings)
+    horloge = {"v": (64, 44100)}
+    ecrits = []
+
+    def ecrire(quantum=None, rate=None):
+        ecrits.append((quantum, rate))
+        q, r = horloge["v"]
+        horloge["v"] = (quantum or q, rate or r)
+
+    douzefx.ecrire_horloge = ecrire
+    douzefx._clock_effectif = lambda vals=None: horloge["v"]
+    douzefx.graph_settings = lambda: {"quantum": horloge["v"][0],
+                                      "rate": horloge["v"][1]}
+    gestes = []
+    s.alive = lambda: True
+    s.stop = lambda: (gestes.append("stop"), (True, "arrêtée"))[1]
+    s.start = lambda: (gestes.append("start"), (True, "démarrée"))[1]
+
+    try:
+        r = sup.set_graph(quantum=256)
+        verifie(ecrits == [(256, None)], "le réglage demandé est bien écrit")
+        verifie(gestes == ["stop", "start"],
+                "une bande en marche est arrêtée PUIS redémarrée "
+                "(un changement de bloc à chaud rend Clear muet sans rien dire)")
+        verifie(r.get("restarted") == ["h"] and not r.get("failed"),
+                "et le bilan la nomme, pour que la GUI puisse l'annoncer")
+        verifie(r.get("quantum") == 256,
+                "la réponse porte AUSSI l'état de l'horloge (la GUI la réaffiche avec)")
+
+        gestes[:] = []
+        r = sup.set_graph(quantum=256)
+        verifie(not gestes and r.get("restarted") == [],
+                "même valeur redemandée : personne n'est coupé pour rien")
+
+        gestes[:] = []
+        s.alive = lambda: False
+        r = sup.set_graph(quantum=512)
+        verifie(not gestes and r.get("restarted") == [],
+                "une bande à l'arrêt n'est pas démarrée par un changement d'horloge")
+
+        gestes[:] = []
+        s.alive = lambda: True
+        s.start = lambda: (False, "pas de réponse de la bande")
+        r = sup.set_graph(quantum=1024)
+        verifie(r.get("restarted") == []
+                and r.get("failed") == ["h : pas de réponse de la bande"],
+                "une relance ratée REMONTE — une bande muette ne se voit pas à l'écran")
+
+        s.start = lambda: (True, "démarrée")
+        sup.BUSY_WAIT = 0.05
+        sup.lock.acquire()
+        try:
+            r = sup.set_graph(quantum=2048)
+        finally:
+            sup.lock.release()
+        verifie(r.get("failed") and "occupé" in r["failed"][0],
+                "verrou pris : le réglage passe, les bandes non — et on le dit")
+    finally:
+        douzefx.ecrire_horloge, douzefx._clock_effectif, douzefx.graph_settings = vrai
+
+
 def test_readoption():
     print("[test] réadoption des applications sur un nœud recréé")
     import douzefx
@@ -862,6 +939,7 @@ def main():
         test_threads_temps_reel(tmp)
         test_refus_transmis(tmp)
         test_profils(tmp)
+        test_horloge_relance(tmp)
         test_readoption()
         test_scan_amorcage(tmp)
         test_enumeration_plugins()

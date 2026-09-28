@@ -34,6 +34,9 @@ import usb.core
 import usb.util
 
 VID, PID = 0x31E9, 0x0024
+# Autres modèles SSL (SSL 18 : 0x0026…) : SSL_PID=0x0026 — non validés, `listen`
+# seul est sans risque (cf. README).
+PID = int(os.environ.get("SSL_PID", hex(PID)), 0)
 EP_IN, EP_OUT = 0x81, 0x02
 
 UNITY = 1 << 25          # 0 dB (cf. PROTOCOL.md)
@@ -135,28 +138,31 @@ def val_to_db(v):
 
 def parse_in_stream(chunks):
     """Réassemble le flux IN (en-tête 31 xx par paquet 64 o) et itère les
-    messages (opcode, payload)."""
+    messages (opcode, payload) AU FIL de l'arrivée des paquets — le premier jet
+    lisait tout le flux avant de rien produire : `listen` restait muet jusqu'à
+    la fin de `--secs`, et un Ctrl-C perdait tout."""
     buf = bytearray()
     for raw in chunks:
         for off in range(0, len(raw), 64):
             c = raw[off:off + 64]
             if len(c) >= 2 and c[0] == 0x31:
                 buf += c[2:]
-    i = 0
-    while i + 4 <= len(buf):
-        if buf[i] != 0xFF:
-            i += 1
-            continue
-        op, ln = buf[i + 1], buf[i + 2]
-        end = i + 4 + ln
-        if end > len(buf):
-            break
-        payload = bytes(buf[i + 3:end - 1])
-        if (op + ln + sum(payload)) & 0xFF == buf[end - 1]:
-            yield op, payload
-            i = end
-        else:
-            i += 1
+        i = 0
+        while i + 4 <= len(buf):
+            if buf[i] != 0xFF:
+                i += 1
+                continue
+            op, ln = buf[i + 1], buf[i + 2]
+            end = i + 4 + ln
+            if end > len(buf):
+                break                         # message incomplet : attendre la suite
+            payload = bytes(buf[i + 3:end - 1])
+            if (op + ln + sum(payload)) & 0xFF == buf[end - 1]:
+                yield op, payload
+                i = end
+            else:
+                i += 1
+        del buf[:i]
 
 
 def describe(op, payload):
@@ -307,7 +313,7 @@ class SSL12:
     def __init__(self):
         self.dev = usb.core.find(idVendor=VID, idProduct=PID)
         if self.dev is None:
-            sys.exit("SSL Control I/F (31e9:0024) introuvable — SSL 12 branchée ?")
+            sys.exit(f"SSL Control I/F (31e9:{PID:04x}) introuvable — SSL 12 branchée ?")
         # ⚠️ NE PAS appeler `set_configuration()` sans vérifier d'abord.
         #
         # C'est une requête au niveau du PÉRIPHÉRIQUE : elle réussit même quand
@@ -357,10 +363,26 @@ def show_replies(msgs):
 # ---------------------------------------------------------------- commandes
 
 def cmd_info(_a):
-    dev = usb.core.find(idVendor=VID, idProduct=PID)
-    if dev is None:
-        sys.exit("SSL Control I/F introuvable.")
-    print(f"bus {dev.bus} addr {dev.address}  bcdDevice {dev.bcdDevice:#06x}")
+    devs = list(usb.core.find(find_all=True, idVendor=VID))
+    if not devs:
+        sys.exit("Aucun périphérique Solid State Logic (31e9) trouvé.")
+    for dev in devs:
+        mark = "  ← utilisé" if dev.idProduct == PID else ""
+        print(f"31e9:{dev.idProduct:04x}  bus {dev.bus} addr {dev.address}  "
+              f"bcdDevice {dev.bcdDevice:#06x}{mark}")
+        if dev.idProduct != PID:
+            continue
+        # Descripteurs lus sur la copie en cache de pyusb : ne touche pas au device.
+        for cfg in dev:
+            for intf in cfg:
+                print(f"  interface {intf.bInterfaceNumber} alt {intf.bAlternateSetting}"
+                      f"  class {intf.bInterfaceClass:#04x}")
+                for ep in intf:
+                    kind = ("bulk", "interrupt", "iso", "control")
+                    t = usb.util.endpoint_type(ep.bmAttributes)
+                    print(f"    EP {ep.bEndpointAddress:#04x}  "
+                          f"{kind[[usb.util.ENDPOINT_TYPE_BULK, usb.util.ENDPOINT_TYPE_INTR, usb.util.ENDPOINT_TYPE_ISO, usb.util.ENDPOINT_TYPE_CTRL].index(t)]}"
+                          f"  {ep.wMaxPacketSize} o")
 
 
 def cmd_init(_a):
@@ -373,13 +395,20 @@ def cmd_init(_a):
 
 def cmd_listen(a):
     d = SSL12()
-    print(f"écoute décodée pendant {a.secs}s (Ctrl-C pour arrêter)…")
+    print(f"écoute décodée pendant {a.secs}s (Ctrl-C pour arrêter)…", flush=True)
     try:
+        if a.raw:
+            # Sans aucun filtre : ni en-tête 31, ni checksum. Pour un modèle qui
+            # encadrerait autrement, le mode décodé resterait muet.
+            for raw in d.read_chunks(a.secs):
+                print(f"IN {len(raw):3d} o  {raw.hex(' ')}", flush=True)
+            return
         for op, payload in parse_in_stream(d.read_chunks(a.secs)):
             desc = describe(op, payload)
             if desc == "vumètres" and not a.meters:
                 continue
-            print(f"IN 0x{op:02x} [{payload.hex(' ')}]" + (f"  ← {desc}" if desc else ""))
+            print(f"IN 0x{op:02x} [{payload.hex(' ')}]" + (f"  ← {desc}" if desc else ""),
+                  flush=True)
     except KeyboardInterrupt:
         pass
 
@@ -638,6 +667,8 @@ def main():
     p = sub.add_parser("listen")
     p.add_argument("--secs", type=float, default=30)
     p.add_argument("--meters", action="store_true", help="afficher aussi les vumètres")
+    p.add_argument("--raw", action="store_true",
+                   help="paquets USB bruts, sans décodage (autres modèles)")
     p.set_defaults(fn=cmd_listen)
 
     p = sub.add_parser("send")

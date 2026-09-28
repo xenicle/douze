@@ -924,6 +924,38 @@ def test_readoption():
             "nœud absent → aucun effet")
 
 
+def test_horloge_carte(tmp):
+    print("[test] horloge : la carte tourne-t-elle à la fréquence crue ?")
+    from douzefx import vitesse_hote, horloge_divergente
+
+    racine = os.path.join(tmp, "asound")
+    def carte(n, ident, rate=None, sens="pcm0p"):
+        d = os.path.join(racine, f"card{n}")
+        os.makedirs(os.path.join(d, sens, "sub0"), exist_ok=True)
+        with open(os.path.join(d, "id"), "w") as f:
+            f.write(ident + "\n")
+        with open(os.path.join(d, sens, "sub0", "hw_params"), "w") as f:
+            f.write("closed\n" if rate is None else
+                    f"access: MMAP_INTERLEAVED\nformat: S32_LE\nrate: {rate} ({rate}/1)\n")
+
+    verifie(vitesse_hote(racine) is None, "pas de /proc/asound → None")
+    carte(0, "Generic", 48000)
+    carte(3, "S12", None)
+    verifie(vitesse_hote(racine) is None,
+            "flux de la SSL fermé → None (et l'autre carte n'est pas prise pour elle)")
+    carte(3, "S12", 44100, sens="pcm0c")
+    verifie(vitesse_hote(racine) == 44100, "lue sur la capture si la lecture est fermée")
+
+    # Le cas du 28/09/2026, tel que la carte l'a renvoyé.
+    verifie(horloge_divergente([48000, 48000, 44100, 192000], 44100) == (48000, 44100),
+            "carte à 48000 crue à 44100 → signalé")
+    verifie(horloge_divergente([44100, 48000, 44100, 192000], 44100) is None,
+            "bloc de la capture de référence → rien à signaler")
+    verifie(horloge_divergente(None, 44100) is None
+            and horloge_divergente([48000], None) is None,
+            "horloge pas encore lue, ou flux fermé → aucune alerte")
+
+
 def test_scan_amorcage(tmp):
     print("[test] scan : amorçage du catalogue")
     import douzefx
@@ -1006,6 +1038,7 @@ def main():
         test_profils(tmp)
         test_horloge_relance(tmp)
         test_readoption()
+        test_horloge_carte(tmp)
         test_scan_amorcage(tmp)
         test_enumeration_plugins()
 

@@ -137,6 +137,10 @@ class Device(threading.Thread):
         self.stats = {"reads": 0, "bytes": 0, "frames": 0, "ops": {}, "err": None}
         self.last_push = 0.0
         self.clock = None    # liste de rates lue via get 0x0c (sub 0x11)
+        # (réelle, crue) quand la carte ne tourne pas à la fréquence que le PC
+        # croit — confirmé sur DEUX lectures, cf. douzefx.horloge_divergente.
+        self.clock_mismatch = None
+        self._ecart_vu = None
 
     def write(self, data):
         with self.lock:
@@ -150,11 +154,38 @@ class Device(threading.Thread):
         self.write(frame(0x05))   # 2e ff 05 = démarre le flux vumètres (observé)
         self.write(msg_get(0x0C, 0))   # bloc horloge/sample rates
 
+    # Relecture de l'horloge : la carte peut changer de fréquence SANS rien
+    # notifier (28/09/2026 : revenue à 48000 après un rebranchement, pendant que
+    # le PC lui parlait en 44100). Même trame que le handshake, donc observée.
+    CLOCK_POLL = 20.0
+
     def keepalive(self):
+        derniere = time.monotonic()
         while True:
             self.write(frame(0x1B, bytes([self.seq])))
             self.seq = (self.seq + 1) % 4
+            if time.monotonic() - derniere >= self.CLOCK_POLL:
+                derniere = time.monotonic()
+                self.write(msg_get(0x0C, 0))
             time.sleep(0.15)
+
+    def _verifier_horloge(self):
+        """Compare la fréquence réelle de la carte à celle que le PC croit.
+
+        Un écart n'est retenu qu'à la DEUXIÈME lecture identique : pendant un
+        changement de fréquence (set_graph, redémarrage de PipeWire), la carte
+        et ALSA ne basculent pas au même instant, et une alerte d'une lecture
+        serait un faux positif."""
+        ecart = douzefx.horloge_divergente(self.clock, douzefx.vitesse_hote())
+        if ecart is None:
+            self.clock_mismatch = None
+        elif ecart == self._ecart_vu and ecart != self.clock_mismatch:
+            self.clock_mismatch = ecart
+            print(f"⚠ la carte tourne à {ecart[0]} Hz mais le PC lui parle en "
+                  f"{ecart[1]} Hz — tout est accéléré ou ralenti. Remède : "
+                  f"systemctl --user restart pipewire pipewire-pulse wireplumber",
+                  flush=True)
+        self._ecart_vu = ecart
 
     def run(self):
         threading.Thread(target=self.keepalive, daemon=True).start()
@@ -216,7 +247,9 @@ class Device(threading.Thread):
         elif sub == 0x11:
             self.clock = [int.from_bytes(payload[6 + 4 * i:10 + 4 * i], "little")
                           for i in range((len(payload) - 8) // 4)]
-            self.bus.push({"ev": "clock", "rates": self.clock})
+            self._verifier_horloge()
+            self.bus.push({"ev": "clock", "rates": self.clock,
+                           "mismatch": self.clock_mismatch})
         elif sub == 0x05:
             # écho/notification d'état booléen (GUI *et* boutons physiques)
             ctrl = int.from_bytes(payload[2:4], "little")
@@ -540,6 +573,7 @@ def apply_cmd(c):
     with STATE_LOCK:
         st = _apply_cmd(c)
     st["_clock"] = DEV.clock
+    st["_clock_mismatch"] = DEV.clock_mismatch
     st["_profiles"] = list_profiles()
     BUS.push({"ev": "state", "state": st})   # sync live de toutes les pages
     return st
@@ -675,6 +709,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/state":
             st = load_state()
             st["_clock"] = DEV.clock
+            st["_clock_mismatch"] = DEV.clock_mismatch
             st["_profiles"] = list_profiles()
             self.send_json(st)
         elif self.path == "/manifest.json":

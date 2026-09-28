@@ -333,6 +333,11 @@ stroke-linecap='round' stroke-linejoin='round'/></svg>");
   <div class="brand"><b>Douze</b><span>SSL 12</span></div>
   <div class="stat"><span class="dot" id="conn"></span><span id="connlbl">Connectée</span></div>
   <div class="stat mono" id="clock">— kHz</div>
+  <!-- La carte ne tourne pas à la fréquence que le PC croit (vécu le 28/09/2026 :
+       48 kHz réels contre 44,1 kHz crus après un rebranchement → tout ~9 % trop
+       aigu). Aucun xrun, aucun message ailleurs : sans cette pastille, on doute
+       de son oreille. -->
+  <span id="clockwarn" class="pill amber" data-i18n="clockwarn" hidden></span>
   <div class="stat"><label class="lbl" for="profiles" data-i18n="profile">Profil</label>
     <select id="profiles"><option value="">—</option></select>
     <!-- Réglages modifiés depuis le rappel du profil. Marqueur à part (pas dans
@@ -497,6 +502,8 @@ const I18N = {
        profile: "Profil", save: "Enregistrer", profname: "Nom du profil :",
        profdel: "Supprimer le profil « %s » ?",
        profdirty: "Réglages modifiés depuis le rappel de ce profil",
+       clockwarn: "horloge faussée",
+       clockwarntitle: "La carte tourne à %r Hz mais le PC lui parle en %h Hz : tout ce que tu écoutes est accéléré ou ralenti, et ton micro aussi pour les autres. Remède : systemctl --user restart pipewire pipewire-pulse wireplumber (puis relancer Discord/Vesktop).",
        fx: "Effets — bandes", fxnone: "Aucune bande configurée.",
        fxstart: "Démarrer", fxstop: "Arrêter", fxbypass: "Bypass",
        fxadd: "＋ Ajouter", fxpick: "Ajouter un plugin", fxsearch: "Chercher…",
@@ -558,6 +565,8 @@ const I18N = {
        profile: "Profile", save: "Save", profname: "Profile name:",
        profdel: "Delete profile “%s”?",
        profdirty: "Settings changed since this profile was recalled",
+       clockwarn: "clock mismatch",
+       clockwarntitle: "The interface runs at %r Hz but the computer talks to it at %h Hz: everything you hear is sped up or slowed down, and so is your microphone for others. Fix: systemctl --user restart pipewire pipewire-pulse wireplumber (then restart Discord/Vesktop).",
        fx: "Effects — strips", fxnone: "No strip configured.",
        fxstart: "Start", fxstop: "Stop", fxbypass: "Bypass",
        fxadd: "＋ Add", fxpick: "Add a plug-in", fxsearch: "Search…",
@@ -625,6 +634,7 @@ function applyLang() {
   lb.querySelector('[value="none"]').textContent = T("loopnone");
   lb.querySelector('[value="monitor"]').textContent = T("loopmon");
   document.getElementById("connlbl").textContent = T(connKey);
+  if (lastClock) setClock(lastClock, lastMismatch);   // kHz + infobulle localisés
   const r = document.documentElement;
   document.getElementById("theme").textContent =
     r.getAttribute("data-theme") === "light" ? T("theme_dark") : T("theme_light");
@@ -765,7 +775,7 @@ function refresh(st) {
   if (lv.dimlevel !== undefined) document.getElementById("dimlevel").value = lv.dimlevel;
   if (lv.alttrim !== undefined) document.getElementById("alttrim").value = lv.alttrim;
   document.getElementById("altspk").checked = !!st.alt_spk;
-  if (st._clock) setClock(st._clock);
+  if (st._clock) setClock(st._clock, st._clock_mismatch);
   if (st._profiles) {
     const sel = document.getElementById("profiles");
     // `sel.value` ne survit pas à un rechargement de page : au démarrage il est
@@ -782,11 +792,17 @@ function refresh(st) {
   }
 }
 
-function setClock(rates) {
+let lastClock = null, lastMismatch = null;
+function setClock(rates, mismatch) {
   if (!rates || !rates.length) return;
+  lastClock = rates; lastMismatch = mismatch || null;
   const khz = rates[0] / 1000;
   document.getElementById("clock").textContent =
     khz.toLocaleString(LANG === "fr" ? "fr-FR" : "en-GB") + " kHz";
+  const w = document.getElementById("clockwarn");
+  w.hidden = !lastMismatch;
+  if (lastMismatch)
+    w.title = T("clockwarntitle").replace("%r", lastMismatch[0]).replace("%h", lastMismatch[1]);
 }
 
 // ---------------------------------------------------------------- câblage
@@ -972,7 +988,7 @@ function startEvents() {
         updateBar(b, m.v[BUS_METER_IDX[name][+side]] || 0);
       });
     } else if (m.ev === "clock") {
-      setClock(m.rates);
+      setClock(m.rates, m.mismatch);
     } else if (m.ev === "state") {
       refresh(m.state);
     } else if (m.ev === "bool") {

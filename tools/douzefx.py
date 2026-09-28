@@ -572,6 +572,54 @@ def _clock_effectif(vals=None):
             num("clock.force-rate") or num("clock.rate"))
 
 
+def vitesse_hote(racine="/proc/asound", carte="S12"):
+    """Fréquence à laquelle le PC CROIT parler à la carte, ou None (flux fermé).
+
+    Lue dans les `hw_params` ALSA : c'est ce que PipeWire a demandé à
+    l'ouverture. À comparer à la 1ʳᵉ valeur du bloc horloge de la carte (sa
+    fréquence RÉELLE) — cf. `horloge_divergente`."""
+    try:
+        cartes = sorted(os.listdir(racine))
+    except OSError:
+        return None
+    for nom in cartes:
+        if not nom.startswith("card"):
+            continue
+        d = os.path.join(racine, nom)
+        try:
+            with open(os.path.join(d, "id")) as f:
+                if f.read().strip() != carte:
+                    continue
+        except OSError:
+            continue
+        for sens in ("pcm0p", "pcm0c"):
+            try:
+                with open(os.path.join(d, sens, "sub0", "hw_params")) as f:
+                    m = re.search(r"^rate:\s*(\d+)", f.read(), re.M)
+            except OSError:
+                continue
+            if m:
+                return int(m.group(1))
+    return None
+
+
+def horloge_divergente(taux_carte, hote):
+    """(réelle, crue) si la carte ne tourne PAS à la fréquence que le PC croit.
+
+    Vécu le 28/09/2026 après un rebranchement : la carte tournait à 48000
+    pendant qu'ALSA, PipeWire et Douze la croyaient à 44100. Aucun xrun, aucun
+    message : tout sortait ~9 % trop aigu (voix « chipmunk ») et le micro
+    partait trop grave. ALSA ne le voit pas (`hw_params` ET `Momentary freq`
+    disaient 44100) ; seuls le bloc horloge de la carte et la progression de
+    `hw_ptr` (48001/s) le montraient. Remède : rouvrir le flux (redémarrer
+    PipeWire), la carte reprend alors la fréquence demandée.
+    """
+    if not taux_carte or not hote:
+        return None                      # rien à comparer (flux fermé, pas lu)
+    reelle = taux_carte[0]
+    return (reelle, hote) if reelle and reelle != hote else None
+
+
 def graph_settings():
     """Réglages d'horloge du graphe PipeWire (quantum et taux d'échantillonnage).
 

@@ -117,7 +117,7 @@ apparente ; captures 04/05/06).
 | `0x08` | OUT | u16 LE | **set enum** (sélecteurs) : contrôle 11 = LOOPBACK SOURCE (0 = None, 1/2/… = position dans le menu) — capture 13 | `08 00 0b 00 00 00 01 00` |
 | `0x03` | OUT | — | **get** (lecture) ? | `03 00 0c 00 00 00` |
 | `0x01` | OUT | — | ? (payload `01 00` seul, sans param) | |
-| `0x09`, `0x11` | IN | variable | notifs (09 = vumètres, 11 = infos horloge : `44 ac`=44100, `80 bb`=48000, `00 ee 02`=192000 vus) | |
+| `0x09`, `0x11` | IN | variable | notifs (09 = vumètres, 11 = infos horloge : `44 ac`=44100, `80 bb`=48000, `00 ee 02`=192000 vus). **1ʳᵉ valeur du bloc = fréquence RÉELLE du device** (établi le 28/09/2026 : `[48000, 48000, 44100, 192000]` pendant qu'ALSA se croyait à 44100 et que `hw_ptr` avançait à 48001/s ; après réouverture du flux, `[44100, …]` et 44097/s). Les 3 autres : sens inconnu, constantes jusqu'ici | |
 
 **Vumètres (0x6c sub 09)** — payload `09 00 01 00 00 00 | count u16 | count×u16`
 (peak s16, 32767 = 0 dBFS ; ~20 trames/s ; le flux démarre sur un **second**

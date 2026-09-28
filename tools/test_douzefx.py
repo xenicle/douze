@@ -851,6 +851,71 @@ def test_readoption():
     verifie(douzefx._liens_indesirables(200, 100, "output-node-id", "input-node-id"),
             "et le lien en trop est bien détecté (c'est ce qui déclenche l'alerte)")
 
+    # Les FRÈRES (28/09/2026) : Vesktop ouvre deux flux de lecture identiques,
+    # l'un vise la bande, l'autre n'a aucune cible et retombe sur le défaut.
+    noeud = lambda i, nom, cls, **kw: dict(
+        id=i, type="PipeWire:Interface:Node",
+        info={"props": dict(**{"node.name": nom, "media.class": cls}, **kw)})
+    port = lambda i, nid, sens, num: dict(
+        id=i, type="PipeWire:Interface:Port",
+        info={"props": {"node.id": nid, "port.direction": sens, "port.id": num}})
+    lien = lambda i, on, op, inn, ip: dict(
+        id=i, type="PipeWire:Interface:Link",
+        info={"output-node-id": on, "output-port-id": op,
+              "input-node-id": inn, "input-port-id": ip})
+    app = {"application.name": "vesktop"}
+    freres = [
+        noeud(100, "douze_fx_in_test", "Audio/Sink", **{"object.serial": 500}),
+        port(110, 100, "in", 0), port(111, 100, "in", 1),
+        noeud(300, "ssl12.pb12", "Audio/Sink"),
+        port(310, 300, "in", 0), port(311, 300, "in", 1),
+        # le flux qui vise la bande, déjà branché
+        noeud(200, "vesktop", "Stream/Output/Audio",
+              **app, **{"target.object": "douze_fx_in_test"}),
+        port(210, 200, "out", 0), port(211, 200, "out", 1),
+        lien(900, 200, 210, 100, 110), lien(901, 200, 211, 100, 111),
+        # son frère SANS cible, retombé sur pb12
+        noeud(250, "vesktop", "Stream/Output/Audio", **app),
+        port(260, 250, "out", 0), port(261, 250, "out", 1),
+        lien(902, 250, 260, 300, 310), lien(903, 250, 261, 300, 311),
+        # un frère pointé AILLEURS exprès
+        noeud(270, "vesktop", "Stream/Output/Audio",
+              **app, **{"target.object": "ssl12.pb12"}),
+        port(280, 270, "out", 0),
+        lien(904, 270, 280, 300, 310),
+        # une autre appli sans cible, dont AUCUN flux ne vise la bande
+        noeud(400, "firefox", "Stream/Output/Audio", **{"application.name": "Firefox"}),
+        port(410, 400, "out", 0),
+        lien(905, 400, 410, 300, 310),
+    ]
+    appels.clear()
+    douzefx._pw_objects = lambda: freres
+    douzefx._pw_link = lambda *a: appels.append(a) or True
+    verifie(douzefx.readopt_streams("douze_fx_in_test", mic=False, objs=freres) == 1,
+            "le frère sans cible est rallié (et lui seul)")
+    verifie(("260", "110") in appels and ("261", "111") in appels,
+            f"branché sur le puits de la bande : {appels}")
+    verifie(("-d", "260", "310") in appels, "et débranché de la sortie par défaut")
+    verifie(all("280" not in a for a in appels),
+            "un flux pointé AILLEURS exprès n'est pas touché, même frère")
+    verifie(all("410" not in a for a in appels),
+            "une appli dont aucun flux ne vise la bande n'est pas touchée")
+
+    # Côté micro : on SIGNALE, on ne détourne pas (cf. capteurs_paralleles).
+    micro = [
+        noeud(100, "douze_fx_test", "Audio/Source/Virtual", **{"object.serial": 500}),
+        port(120, 100, "out", 0),
+        noeud(600, "carte", "Audio/Source"), port(620, 600, "out", 0),
+        noeud(200, "vesktop", "Stream/Input/Audio",
+              **app, **{"target.object": "douze_fx_test"}),
+        port(220, 200, "in", 0), lien(906, 100, 120, 200, 220),
+        noeud(250, "vesktop", "Stream/Input/Audio", **app),
+        port(270, 250, "in", 0), lien(907, 600, 620, 250, 270),
+    ]
+    appels.clear()
+    verifie(douzefx.readopt_streams("douze_fx_test", mic=True, objs=micro) == 0
+            and not appels, "côté micro, le frère sans cible n'est PAS détourné")
+
     # Nœud absent du graphe : on renonce sans rien casser (après la fenêtre
     # d'attente — en vrai le nœud vient d'être confirmé présent par `_wait_node`,
     # donc la première passe suffit).

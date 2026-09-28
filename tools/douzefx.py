@@ -317,7 +317,7 @@ def threads_audio_sans_rt(pid, racine="/proc"):
     return sorted(set(sans)), total
 
 
-def readopt_streams(slug, mic):
+def readopt_streams(slug, mic, objs=None):
     """Rebranche les applications qui VISENT `slug` sans y être reliées.
 
     `mic` dit de quel côté se trouve le nœud : un micro virtuel DONNE aux applis
@@ -328,14 +328,30 @@ def readopt_streams(slug, mic):
     les deux — dont celui qu'on ne visait pas (erreur commise à la main le
     17/08/2026 : le second flux de Discord s'est retrouvé sans aucun lien).
 
+    Côté PUITS seulement, un flux SANS AUCUNE cible est rallié lui aussi quand
+    un AUTRE flux de la même application vise la bande : ses « frères ». Le
+    28/09/2026, Vesktop jouait sur deux flux identiques (`media.name: Playback`),
+    l'un visant `douze_fx_in_retour`, l'autre sans cible et donc posé par
+    WirePlumber sur la sortie par défaut — une partie de Discord arrivait sur
+    pb12 (mix + HP A + HP B) au lieu de pb34, sans passer par la bande. On ne
+    peut pas mémoriser la cible côté WirePlumber : sa clé de restauration
+    (`Output/Audio:application.name:vesktop`) est COMMUNE aux deux flux, et
+    viser l'un y viserait l'autre. Un flux pointé AILLEURS exprès n'est jamais
+    touché, ni une appli dont aucun flux ne vise la bande. Côté micro, on s'en
+    tient à SIGNALER (cf. `capteurs_paralleles`).
+
+    `objs` : photo du graphe déjà prise (ronde de surveillance). Sans elle, on
+    relit le graphe en laissant au nœud le temps d'apparaître.
+
     Renvoie le nombre d'applications rebranchées.
     """
     props = lambda o: (o.get("info") or {}).get("props") or {}
     est = lambda o, quoi: str(o.get("type", "")).endswith(quoi)
 
+    photo = objs
     # Le nœud vient d'apparaître : ses ports peuvent suivre d'un souffle.
-    for _ in range(6):
-        objs = _pw_objects()
+    for _ in range(1 if photo is not None else 6):
+        objs = photo if photo is not None else _pw_objects()
         cible = next((o for o in objs
                       if est(o, "Node") and props(o).get("node.name") == slug), None)
         ports = {}
@@ -361,14 +377,21 @@ def readopt_streams(slug, mic):
                   else ("output-node-id", "input-node-id"))
     classe = "Stream/Input/Audio" if mic else "Stream/Output/Audio"
 
+    cible_de = lambda p: str(p.get("target.object") or p.get("node.target") or "")
+    flux_de_classe = [o for o in objs
+                      if est(o, "Node") and props(o).get("media.class") == classe]
+    # Applications dont au moins un flux vise la bande (noms vides exclus : sans
+    # nom, impossible de dire que deux flux sont frères).
+    applis = set() if mic else {
+        props(o).get("application.name") for o in flux_de_classe
+        if cible_de(props(o)) in (slug, serial)} - {None, ""}
+
     n = 0
-    for o in objs:
-        if not est(o, "Node"):
-            continue
+    for o in flux_de_classe:
         p = props(o)
-        if p.get("media.class") != classe:
-            continue
-        if str(p.get("target.object") or p.get("node.target") or "") not in (slug, serial):
+        vise = cible_de(p) in (slug, serial)
+        frere = not cible_de(p) and p.get("application.name") in applis
+        if not (vise or frere):
             continue
 
         flux = o["id"]
@@ -1645,6 +1668,30 @@ class Supervisor:
                 print(f"[fx] {s.id} : {', '.join(s.capteurs)} capte(nt) AUSSI "
                       f"l'entrée matérielle — ces flux-là ne passent par aucun "
                       f"plugin", flush=True)
+            self._rallier(s, objs)
+
+    def _rallier(self, s, objs):
+        """Rebranche sur le puits d'une bande les flux qui l'ont perdu en route.
+
+        `readopt_streams` ne passe qu'au DÉMARRAGE de la bande ; or une appli
+        relancée (Vesktop après un rebranchement de la carte, le 28/09/2026)
+        ouvre ses flux n'importe quand, et son flux sans cible retombe sur la
+        sortie par défaut. Même photo du graphe que les capteurs : rien de plus
+        à payer quand tout est déjà en place.
+        """
+        if s.cfg.get("source", {}).get("kind") != "virtualsink" or not s.alive():
+            return
+        # Une bande qui démarre ou s'arrête recrée son puits : la photo serait
+        # périmée. Ce sera pour la ronde suivante.
+        if not self.lock.acquire(blocking=False):
+            return
+        try:
+            slug = "douze_fx_in_" + _slug(s.id)
+            repris = readopt_streams(slug, mic=False, objs=objs)
+        finally:
+            self.lock.release()
+        if repris:
+            print(f"[fx] {s.id} : {repris} flux rallié(s) sur {slug}", flush=True)
 
     def _relever_rt(self):
         """Les threads audio des bandes tournent-ils bien en temps réel ?

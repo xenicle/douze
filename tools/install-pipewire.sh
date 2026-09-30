@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Installe les 4 sinks stéréo de la SSL 12 pour l'utilisateur courant.
+# Installe les 4 sinks stéréo de la SSL 12 pour l'utilisateur courant, et la
+# règle WirePlumber qui empêche la mise en veille de la carte (sans elle, la
+# lecture repart déphasée de la capture au premier son après un silence :
+# craquements, cf. wireplumber/51-ssl12-no-suspend.conf).
 #
 # Le fichier de configuration est un MODÈLE : il désigne la carte par le nom de
 # son nœud ALSA, qui contient son numéro de série — donc différent sur chaque
@@ -14,6 +17,8 @@ set -euo pipefail
 
 ici="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 modele="$ici/pipewire/99-ssl12-sinks.conf"
+regle="$ici/wireplumber/51-ssl12-no-suspend.conf"
+dest_wp="${XDG_CONFIG_HOME:-$HOME/.config}/wireplumber/wireplumber.conf.d/51-ssl12-no-suspend.conf"
 dest="${XDG_CONFIG_HOME:-$HOME/.config}/pipewire/pipewire.conf.d/99-ssl12-sinks.conf"
 
 if [[ ! -r "$modele" ]]; then
@@ -52,9 +57,14 @@ fi
 sed "s|@SSL12_NODE@|$noeud|g" "$modele" > "$dest"
 echo "écrit : $dest"
 
+# La règle ne dépend pas du numéro de série (motif regex) : copie telle quelle.
+mkdir -p "$(dirname "$dest_wp")"
+cp "$regle" "$dest_wp"
+echo "écrit : $dest_wp (la carte ne sera plus mise en veille)"
+
 echo
-echo "Reste à recharger PipeWire :"
-echo "    systemctl --user restart pipewire"
+echo "Reste à recharger PipeWire (entier : la règle vit dans WirePlumber) :"
+echo "    systemctl --user restart pipewire pipewire-pulse wireplumber"
 echo
 echo "⚠️ Un redémarrage de PipeWire coupe les applications audio en cours"
 echo "   (clients Discord, Easy Effects…) : à faire hors session."

@@ -153,9 +153,28 @@ sed "s|@SSL12_NODE@|<that name>|g" pipewire/99-ssl12-sinks.conf \
 pw-play --target ssl12.pb34 /usr/share/sounds/alsa/Front_Center.wav
 ```
 
+**Keep the card awake** — the script also installs
+`wireplumber/51-ssl12-no-suspend.conf`. The four loopbacks are *passive* links,
+so as soon as nothing plays (nobody talking on Discord, no music) WirePlumber
+suspends the SSL output after 5 s. When sound comes back the playback stream
+restarts out of phase with the capture stream, which never stops (a Douze FX
+mic strip keeps it open), and PipeWire then "resyncs" the output on every cycle
+without ever converging: crackles, and the voice of whoever is talking to you
+gets chopped. Tell-tale sign, repeated every 2 s:
+
+```
+journalctl --user -u pipewire | grep resync
+spa.alsa: hw:0,0p: follower avail:10 delay:10 target:512 thr:512, resync (64 suppressed)
+```
+
+The rule sets `session.suspend-timeout-seconds = 0` on the SSL nodes. If it
+happens anyway, the fix is the same restart as above — never `Suspend` the node
+by hand, it comes back with a dead channel.
+
 > Restarting PipeWire drops the connections of apps that were using it (Discord
 > clients and Easy Effects are the usual casualties). Do this before a session,
-> not during one.
+> not during one. Restart all three units together:
+> `systemctl --user restart pipewire pipewire-pulse wireplumber`.
 
 ### 3. The GUI, as a user service
 

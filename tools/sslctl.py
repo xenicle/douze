@@ -122,6 +122,19 @@ def altspk_msgs(on):
             + msg_bool(0x20, 3, on, sub=0x07))
 
 
+def follow_msgs(st):
+    """FOLLOW MIX 1-2 des casques (sub 07, contrôle 7, capture 20) → trames.
+
+    Réémis à CHAQUE restauration, off compris : le device le garde d'un hôte à
+    l'autre, et SSL 360 sur un Mac le laisse allumé sur HP A — le casque recopie
+    alors le mix Monitor et perd ses propres sends (Discord muet, 24/10/2026).
+    HP A est toujours renvoyé (off par défaut, seule instance observée) ; HP B
+    seulement si l'état le porte."""
+    buses = {"hp-a": False, **st.get("follow", {})}
+    return b"".join(msg_bool(7, MASTER_INST[bus], on, sub=0x07)
+                    for bus, on in buses.items())
+
+
 def db_to_val(db):
     """'off'/'-inf' → 0 ; sinon dB → gain linéaire u32 (0 dB = 2²⁵)."""
     if isinstance(db, str) and db.lower() in ("off", "-inf", "inf-", "mute"):
@@ -563,6 +576,9 @@ def cmd_show(_a):
         print(f"bouton {btn.upper():5}: {fn or USER_DEFAULT[btn] + '  (défaut)'}")
     print("enceintes ALT: " + ("activées" if st.get("alt_spk")
                                else "désactivées  (ALT ne commute rien)"))
+    fol = {"hp-a": False, **st.get("follow", {})}
+    for bus, on in fol.items():
+        print(f"follow mix {bus}: " + ("on  (recopie le mix Monitor)" if on else "off"))
 
 
 def cmd_route(a):
@@ -615,14 +631,19 @@ def cmd_sync(_a):
     out += user_msgs(st)
     if st.get("alt_spk"):
         out += altspk_msgs(True)
+    out += follow_msgs(st)
     SSL12().write(out)
-    print("état complet renvoyé au device (mix + routes + masters + boutons)")
+    print("état complet renvoyé au device (mix + routes + masters + boutons + follow)")
 
 
 BUS_MODE_CTRL = {"mono": 2, "cut": 4, "follow": 7}   # sub 07 (capture 20)
 
 
 def cmd_bus(a):
+    if a.mode == "follow":      # le seul des trois que le démon restaure
+        st = load_state()
+        st.setdefault("follow", {})[a.bus] = a.state == "on"
+        save_state(st)
     d = SSL12()
     d.write(msg_bool(BUS_MODE_CTRL[a.mode], MASTER_INST[a.bus], a.state == "on",
                      sub=0x07))

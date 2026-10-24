@@ -29,6 +29,7 @@ import douzefx
 import sslctl
 from sslctl import (BOOL_CTRL, LOOPBACK, MASTER_INST, BUS_LAYERS,
                     USER_BUTTONS, USER_FN, user_msgs, led_group_for, altspk_msgs,
+                    follow_msgs,
                     CHANNELS, STRIDE, compile_mix, compile_sends, send_cells,
                     db_to_val, default_channel, frame, load_state, msg_bool,
                     msg_enum, msg_gain, msg_get, msg_led, save_state)
@@ -428,6 +429,7 @@ def push_full_state(dev):
     out += user_msgs(st)
     if st.get("alt_spk"):
         out += altspk_msgs(True)
+    out += follow_msgs(st)      # off compris : un Mac peut l'avoir laissé allumé
     lv = st.get("monitoring_levels", {})
     if "dimlevel" in lv:
         out += msg_gain(3, 0, db_to_val(lv["dimlevel"]))
@@ -787,6 +789,12 @@ def _apply_cmd(c):
         DEV.write(altspk_msgs(c["on"]))
         st["alt_spk"] = c["on"]
         save_state(st)
+    elif kind == "follow":
+        # FOLLOW MIX 1-2 d'un casque (capture 20) : le casque recopie le mix
+        # Monitor au lieu de ses sends.
+        st.setdefault("follow", {})[c["bus"]] = c["on"]
+        save_state(st)
+        DEV.write(follow_msgs(st))
     elif kind == "dimlevel":
         DEV.write(msg_gain(3, 0, db_to_val(c["db"])))
         st.setdefault("monitoring_levels", {})["dimlevel"] = c["db"]

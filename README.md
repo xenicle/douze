@@ -236,7 +236,7 @@ sslctl hpf 1 on / inst 3 on / phase 2 on
 sslctl dim on / cut on / mono on / alt on / talk on
 sslctl altspk on                   # ALT speakers — required for `alt` to do anything
 sslctl loopback pb34                # loopback source
-sslctl bus hpa follow                # bus mode: follow mix 1-2 / cut / mono
+sslctl bus hp-a follow off          # bus mode: follow mix 1-2 / cut / mono
 sslctl user talk mono-sum           # what a front-panel button does
 ```
 
@@ -276,6 +276,10 @@ not even light up — the card sends no notification at all, so Douze has nothin
 to light. Tick *ALT speakers (outputs 3-4)* in the Monitoring panel, or run
 `sslctl altspk on`. SSL 360 has the same prerequisite. This is stored and
 re-pushed like the rest of the state.
+
+**Headphones A lost a source after a Mac session?** SSL 360 can leave *Follow
+Mix 1-2* on, and the card keeps it. Douze re-pushes it (off by default); toggle it
+in the Monitoring panel or with `sslctl bus hp-a follow on|off`.
 
 ---
 

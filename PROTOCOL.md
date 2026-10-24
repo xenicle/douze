@@ -278,6 +278,13 @@ la LED reste éteinte, le host n'ayant rien à allumer. Ce n'est pas un défaut 
 host : c'est le prérequis que SSL 360 impose aussi (capture 21, où l'enable est
 activé avant de jouer avec ALT). Exposé depuis dans `sslctl altspk` et la GUI.
 
+⚠️ **FOLLOW MIX 1-2 survit au changement d'hôte** (24/10/2026) : après un passage
+sous SSL 360 sur un Mac, HP A est revenu en follow — le casque recopiait le mix
+Monitor, et Pb 3-4 (envoyé au seul HP A, fader Monitor à off) avait disparu.
+Le device ne se relit pas : le host renvoie donc follow HP A à chaque
+restauration, **off compris** (`follow_msgs()`). HP B (instance 6, déduite des
+masters) n'est renvoyé que s'il figure dans l'état — jamais observé sur le fil.
+
 Note : le champ « contrôle » semble être un id de fonction **par famille** (les
 booléens sub 04 ont leur numérotation : 1 = 48V, 3 = Line/Inst ; les continus
 sub 06 la leur : 1 = volume canal, 9 = master bus). Les instances indexent

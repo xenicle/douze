@@ -465,6 +465,8 @@ stroke-linecap='round' stroke-linejoin='round'/></svg>");
              aria-label="ALT speaker trim">
       <label class="altspk"><input id="altspk" type="checkbox">
         <span data-i18n="altspk">Enceintes ALT (sorties 3-4)</span></label>
+      <label class="altspk"><input id="follow-hpa" type="checkbox">
+        <span data-i18n="followhpa">Casque A suit le mix Monitor (Follow Mix 1-2)</span></label>
     </div>
     <div class="big-vol">
       <span class="lbl" data-i18n="hpalbl">Casque A</span>
@@ -494,6 +496,7 @@ const I18N = {
        monvol: "Volume monitor", hpalbl: "Casque A", hpblbl: "Casque B",
        hint: "Glisser ↑↓ : niveau · Clic : on ↔ off. Colonne Monitor = fader de la tranche ; les autres = sends indépendants.",
        altspk: "Enceintes ALT (sorties 3-4)",
+       followhpa: "Casque A suit le mix Monitor (Follow Mix 1-2)",
        userbtns: "Boutons de façade — fonction",
        hwnote: "<b>Synchro façade</b> — les boutons physiques CUT · ALT · TALK remontent ici en direct.",
        connected: "Connectée", disconnected: "Déconnectée", devlost: "Device déconnecté",
@@ -557,6 +560,7 @@ const I18N = {
        monvol: "Monitor level", hpalbl: "Headphones A", hpblbl: "Headphones B",
        hint: "Drag ↑↓: level · Click: on ↔ off. Monitor column = the channel fader; the others are independent sends.",
        altspk: "ALT speakers (outputs 3-4)",
+       followhpa: "Headphones A follow the Monitor mix (Follow Mix 1-2)",
        userbtns: "Front-panel buttons — function",
        hwnote: "<b>Front-panel sync</b> — the hardware CUT · ALT · TALK buttons show up here live.",
        connected: "Connected", disconnected: "Disconnected", devlost: "Device disconnected",
@@ -775,6 +779,7 @@ function refresh(st) {
   if (lv.dimlevel !== undefined) document.getElementById("dimlevel").value = lv.dimlevel;
   if (lv.alttrim !== undefined) document.getElementById("alttrim").value = lv.alttrim;
   document.getElementById("altspk").checked = !!st.alt_spk;
+  document.getElementById("follow-hpa").checked = !!(st.follow || {})["hp-a"];
   if (st._clock) setClock(st._clock, st._clock_mismatch);
   if (st._profiles) {
     const sel = document.getElementById("profiles");
@@ -904,6 +909,8 @@ function wire() {
       api({cmd: "user", button: e.target.dataset.user, fn: e.target.value})));
   document.getElementById("altspk").addEventListener("change", e =>
     api({cmd: "altspk", on: e.target.checked}));
+  document.getElementById("follow-hpa").addEventListener("change", e =>
+    api({cmd: "follow", bus: "hp-a", on: e.target.checked}));
   for (const [id, cmd] of [["dimlevel", "dimlevel"], ["alttrim", "alttrim"]]) {
     const s = document.getElementById(id); let dt = null;
     s.addEventListener("input", () => {

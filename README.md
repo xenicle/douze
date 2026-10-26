@@ -262,8 +262,16 @@ The button is `cut`, `alt` or `talk` (where it sits on the panel — `1`, `2`,
 `3` still work), and the function is one of `dim`, `cut`, `mono-sum`, `alt`,
 `invert-l`, `talkback`. A seventh function exists in SSL 360, "360° GUI", which
 opens the SSL 360 window; it is `gui` here, but it has nothing to open on Linux
-and its value is the one part of the menu we never saw on the wire — so the GUI
-does not offer it.
+and its value was never captured from SSL 360 — so the GUI does not offer it.
+Set from the CLI, the card accepts it (seen on firmware 1.41) and reports each
+press; the daemon then runs the command in `DOUZE_GUI_CMD`, if set — for
+example in a drop-in for the user unit:
+
+```ini
+# ~/.config/systemd/user/douze.service.d/gui.conf
+[Service]
+Environment="DOUZE_GUI_CMD=my-mixer-app --toggle"
+```
 
 The assignment is stored with the rest of your mixer state, and pushed back to
 the card by `sslctl sync` and on daemon startup: unplugging the SSL 12 does not
@@ -278,6 +286,47 @@ to light. Tick *ALT speakers (outputs 3-4)* in the Monitoring panel, or run
 re-pushed like the rest of the state.
 
 ---
+
+## HTTP API
+
+The daemon serves the GUI and a small JSON API on `http://127.0.0.1:1212`,
+for scripts and other front ends. It listens on localhost only and has no
+authentication: any local process can drive the card.
+
+| Endpoint | |
+| --- | --- |
+| `GET /state` | the whole logical state: `channels`, `sends`, `masters`, `monitoring`, `preamp`, `user_buttons`, `bus_modes`, `ui`, … plus `_clock`, `_device` (card present), `_profiles` and `_features` |
+| `GET /events` | Server-Sent Events, one JSON object per `data:` line (see below) |
+| `POST /api` | one command as a JSON object; replies `{"ok": true, "state": {…}}` or `{"ok": false, "error": "…"}` |
+
+Commands (`ch` is `1`–`4`, `a1`–`a8`, `pb12`, `pb34`, `pb56` or `pb78`; levels
+are dB numbers or `"off"`):
+
+| Command | Fields |
+| --- | --- |
+| `fader` | `ch`, `db` — level in the main mix (Monitor) |
+| `pan` | `ch`, `pos` (−100 … 100) |
+| `mute`, `solo` | `ch`, `on` |
+| `route` | `ch`, `bus` (`hpa`, `hpb`, `line34`), `level` — send to an aux bus |
+| `dir` | `ch` (`pb12` … `pb78`), `on` — playback straight to its fixed output |
+| `master` | `bus` (`monitor`, `hp-a`, `hp-b`, `line34`), `db` |
+| `bus` | `bus` (`hp-a`, `hp-b`, `line34`), `mode` (`follow`, `cut`, `mono`), `on` |
+| `mon` | `name` (`dim`, `cut`, `mono`, `invert-l`, `alt`, `talk`), `on` |
+| `preamp` | `name` (`48v`, `inst`, `hpf`, `phase`), `ch` (0–3), `on` |
+| `loopback` | `source` (`none`, `pb12` … `pb78`, `monitor`, `line34`, `hpa`, `hpb`) |
+| `user` | `button` (`cut`, `alt`, `talk`), `fn` (`dim`, `cut`, `mono-sum`, `alt`, `invert-l`, `talkback`, `gui`) |
+| `altspk` | `on` |
+| `dimlevel`, `alttrim` | `db` |
+| `profile-save`, `profile-load`, `profile-delete` | `name` |
+| `ui` | `key`, `value` — a front end's own setting, stored with the state, nothing sent to the card |
+
+Events: `meters` (`v`: the raw meter words, see PROTOCOL.md), `state` (after
+any command), `bool` (a button or switch changed on the card), `clock`,
+`device` / `disconnected`, `gui` (a USER button set to `gui` was pressed),
+`raw` (an incoming frame the daemon does not decode: `op`, `hex`) and `fx`.
+
+`_features` lists the extensions a front end can rely on beyond the commands
+above: `bus_modes`, `ui`, `gui`, `adat`.
 
 ## Desktop app (optional)
 

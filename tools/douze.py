@@ -14,6 +14,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -55,6 +56,17 @@ MANIFEST = {
             "%3C/svg%3E"),
         "sizes": "96x96", "type": "image/svg+xml", "purpose": "any"}],
 }
+
+# Fonctions de l'API que ce démon offre en plus du socle, annoncées dans l'état
+# (`_features`) : une interface tierce masque ce que le démon ne sait pas faire
+# plutôt que d'envoyer des commandes qui échoueraient.
+FEATURES = ["bus_modes", "ui", "gui", "adat"]
+
+# Commande lancée quand un bouton de façade réglé sur « 360° GUI » est pressé
+# (opcode IN 0x22). Lue dans l'environnement — l'unité systemd la fixe — et
+# jamais depuis l'API : POST /api est ouvert à tout process local, il ne doit
+# pas pouvoir choisir ce que le démon exécute.
+GUI_CMD = shlex.split(os.environ.get("DOUZE_GUI_CMD", ""))
 
 # instances des booléens DIR par paire playback (bus de destination fixe)
 DIR_DEST = {"pb12": "mix", "pb34": "line34", "pb56": "hpa", "pb78": "hpb"}
@@ -362,7 +374,22 @@ class Device(threading.Thread):
                 del b[0]
 
     def dispatch(self, op, payload):
+        if op == 0x22 and len(payload) >= 3:
+            # bouton USER réglé sur « 360° GUI » : `GG 00 VV`, GG = groupe LED
+            # du bouton (0c CUT, 0d ALT, 0e TALK), VV = 1 appui / 0 relâché
+            self.bus.push({"ev": "gui", "button": payload[0], "on": bool(payload[2])})
+            if payload[2] and GUI_CMD:
+                try:
+                    subprocess.Popen(GUI_CMD, start_new_session=True,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except OSError as e:
+                    print(f"bouton GUI : {e}", flush=True)
+            return
         if op != 0x6C or len(payload) < 6:
+            # trames non décodées relayées telles quelles (événement raw) :
+            # c'est ainsi que 0x22 a été trouvé, depuis une GUI, sans capture
+            if op not in (0x01, 0x02, 0x05, 0x06, 0x4B, 0x4E):
+                self.bus.push({"ev": "raw", "op": op, "hex": payload.hex()})
             return
         sub = payload[0]
         if sub == 0x09 and len(payload) >= 8:
@@ -387,6 +414,8 @@ class Device(threading.Thread):
             inst = int.from_bytes(payload[4:6], "little")
             val = bool(payload[6])
             name = next((k for k, v in BOOL_CTRL.items() if v == ctrl), None)
+            if not name:
+                self.bus.push({"ev": "raw", "op": op, "hex": payload.hex()})
             if name:
               with STATE_LOCK:
                 st = load_state()
@@ -403,6 +432,8 @@ class Device(threading.Thread):
                     st.setdefault("preamp", {}).setdefault(name, {})[str(inst)] = val
                 save_state(st)
                 self.bus.push({"ev": "bool", "name": name, "inst": inst, "on": val})
+        else:
+            self.bus.push({"ev": "raw", "op": op, "hex": payload.hex()})
 
 
 def push_full_state(dev):
@@ -428,6 +459,11 @@ def push_full_state(dev):
     out += user_msgs(st)
     if st.get("alt_spk"):
         out += altspk_msgs(True)
+    # modes des masters aux (FOLLOW MIX 1-2, CUT, MONO) : le device les oublie
+    # à l'extinction comme le reste, on les renvoie avec l'état
+    for bus, modes in st.get("bus_modes", {}).items():
+        for mode, on in modes.items():
+            out += msg_bool(sslctl.BUS_MODE_CTRL[mode], MASTER_INST[bus], on, sub=0x07)
     lv = st.get("monitoring_levels", {})
     if "dimlevel" in lv:
         out += msg_gain(3, 0, db_to_val(lv["dimlevel"]))
@@ -719,6 +755,7 @@ def apply_cmd(c):
     st["_clock_mismatch"] = DEV.clock_mismatch
     st["_device"] = DEV.present
     st["_profiles"] = list_profiles()
+    st["_features"] = FEATURES
     BUS.push({"ev": "state", "state": st})   # sync live de toutes les pages
     return st
 
@@ -818,6 +855,18 @@ def _apply_cmd(c):
             st.pop("profile", None)
             st.pop("profile_dirty", None)
             save_state(st)
+    elif kind == "bus":
+        # FOLLOW MIX 1-2 / CUT / MONO d'un master aux (capture 20 : sub 07, sans
+        # ACK — d'où la mémoire dans l'état, seule source de vérité pour la GUI)
+        bus, mode, on = c["bus"], c["mode"], bool(c["on"])
+        DEV.write(msg_bool(sslctl.BUS_MODE_CTRL[mode], MASTER_INST[bus], on, sub=0x07))
+        st.setdefault("bus_modes", {}).setdefault(bus, {})[mode] = on
+        save_state(st)
+    elif kind == "ui":
+        # réglages propres à une interface (liens stéréo, colonnes affichées…),
+        # gardés avec l'état pour suivre les profils ; aucune trame envoyée
+        st.setdefault("ui", {})[c["key"]] = c.get("value")
+        save_state(st)
     elif kind == "raw":
         # debug : trame brute (séquences observées uniquement !)
         DEV.write(bytes.fromhex(c["hex"]))
@@ -856,6 +905,7 @@ class Handler(BaseHTTPRequestHandler):
             st["_clock_mismatch"] = DEV.clock_mismatch
             st["_device"] = DEV.present
             st["_profiles"] = list_profiles()
+            st["_features"] = FEATURES
             self.send_json(st)
         elif self.path == "/manifest.json":
             self.send_json(MANIFEST)

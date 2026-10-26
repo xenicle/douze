@@ -98,6 +98,7 @@ ff | opcode (1 o) | len (1 o) | payload (len octets) | checksum (1 o)
 | `0x6b` | OUT | 2 408 | **opération sur paramètre** (get/set — cœur du protocole) |
 | `0x6c` | IN | 321 | réponse/notification paramètre (dont flux vumètres) |
 | `0x04` | IN | 18 | inconnu (paires `9d 01`/`a0 01`) |
+| `0x22` | IN | — | appui d'un bouton USER réglé sur « 360° GUI » : payload `GG 00 VV`, GG = groupe LED du bouton (`0c` CUT, `0d` ALT, `0e` TALK), VV = `01` appui / `00` relâché. Observé sur le device (firmware 1.41, 26/10/2026), hors capture SSL 360 |
 
 ### Structure des messages paramètre `0x6b` (OUT) / `0x6c` (IN)
 
@@ -126,8 +127,9 @@ Index calibrés les 17/08/2026 (tests aux tonalités, v2 corrigée) :
 0–3 = Analogue 1–4 ; 12/13 = Pb 1-2 ; **bus contigus 14–21** : 14/15 = Line
 3-4, 16/17 = HP A, 18/19 = HP B, 20/21 = Monitor (post-master : le meter suit
 le master fader du bus) ; 22/23 = Pb 3-4, 24/25 = Pb 5-6, 26/27 = Pb 7-8
-(présumé) ; 28 = ? ; 4–11 = silencieux dans tous les tests (loopback compris),
-probablement réservés.
+(présumé) ; **28 = micro talkback** (observé le 26/10/2026, firmware 1.41 :
+monte avec la voix pendant TALK, à zéro sinon) ; 4–11 = silencieux dans tous
+les tests (loopback compris), probablement réservés.
 
 - **ACK asymétrique** : les sets continus (sub 06) ne déclenchent aucune
   réponse (capture 04 : 153 sets, rien) ; les sets booléens (sub 04) reçoivent

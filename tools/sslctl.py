@@ -197,11 +197,15 @@ STATE_PATH = os.path.join(os.environ.get("XDG_CONFIG_HOME",
 CHANNELS = {"1": {"slots": (8,)}, "2": {"slots": (9,)},
             "3": {"slots": (10,)}, "4": {"slots": (11,)},
             "pb12": {"slots": (0, 1)}, "pb34": {"slots": (2, 3)},
-            "pb56": {"slots": (4, 5)}, "pb78": {"slots": (6, 7)}}
+            "pb56": {"slots": (4, 5)}, "pb78": {"slots": (6, 7)},
+            # ADAT 1-8, PRÉSUMÉ : les 8 slots mono 14–21 que SSL 360 remet à
+            # -3 dB au dé-AFL (capture 20). Jamais confirmé avec une source
+            # optique branchée ; fermés par défaut, comme les playbacks 3-8.
+            **{f"a{i}": {"slots": (13 + i,)} for i in range(1, 9)}}
 # défaut = profil par défaut de SSL 360 (capture 20) : analogues et pb12 à
 # 0 dB centre dans le mix, les autres playbacks fermés
 DEFAULT_CH = {"fader": 0.0, "pan": 0.0, "mute": False, "solo": False}
-DEFAULT_OFF = {"pb34", "pb56", "pb78"}
+DEFAULT_OFF = {"pb34", "pb56", "pb78"} | {f"a{i}" for i in range(1, 9)}
 SEND_BUSES = ("hpa", "hpb", "line34")   # cibles de `route` (mix = fader)
 
 

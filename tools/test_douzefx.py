@@ -810,6 +810,38 @@ def test_garde_resync(tmp):
     verifie(g4.repos_jusqua > t["v"], "même un soin raté pose le répit")
 
 
+def test_garde_capture_morte():
+    print("[test] garde capture : une appli qui ne lit plus le micro est signalée")
+    import douzefx
+
+    t = {"v": 0.0}
+    alertes = []
+    g = douzefx.GardeCaptureMorte(horloge=lambda: t["v"],
+                                  notifier=lambda *a: alertes.append(a))
+    # La vraie ligne du 04/11/2026, telle que `journalctl -o cat` la rend.
+    vraie = ("mod.protocol-pulse: 0x5eb8d551a220: [vesktop] overrun recover "
+             "read:12919536 avail:6026512 max:4194304 skip:6024748")
+
+    def a(dt, texte=vraie):
+        t["v"] += dt
+        return g.ligne(texte)
+
+    verifie(not a(0), "un seul débordement : peut-être un hoquet, rien")
+    verifie(a(95) and len(alertes) == 1 and "vesktop" in alertes[0][0],
+            "un second ~90 s plus tard (la cadence vue) : alerte nommant l'appli")
+    verifie(not a(95) and not a(95) and len(alertes) == 1,
+            "une seule alerte par flux, pas une toutes les 90 s")
+    autre = vraie.replace("0x5eb8d551a220", "0x5f278f8b5b30")
+    verifie(not a(0, autre) and a(90, autre) and len(alertes) == 2,
+            "un NOUVEAU flux bloqué (appli relancée, retombée) : nouvelle alerte")
+    trois = vraie.replace("0x5eb8d551a220", "0x1")
+    verifie(not a(0, trois) and not a(douzefx.GardeCaptureMorte.FENETRE + 1, trois),
+            "deux hoquets très espacés ne font pas une panne")
+    verifie(not a(1, "mod.protocol-pulse: 0x2: [vesktop] underrun") and
+            not a(1, "spa.alsa: hw:0,0p: follower resync"),
+            "seul l'overrun (flux d'enregistrement) compte")
+
+
 def test_guerir_resync(tmp):
     print("[test] recalage : aller-retour d'horloge, UNE relance des bandes")
     import douzefx
@@ -1001,17 +1033,38 @@ def test_readoption():
         port(410, 400, "out", 0),
         lien(905, 400, 410, 300, 310),
     ]
+    # Depuis le 04/11/2026 le frère est confié à WirePlumber (cible en
+    # métadonnée, retenue pour les flux suivants), JAMAIS rebranché à la main :
+    # refaire ses liens pendant que Vesktop ouvrait ses flux bloquait sa capture.
     appels.clear()
+    vises = []
     douzefx._pw_objects = lambda: freres
     douzefx._pw_link = lambda *a: appels.append(a) or True
-    verifie(douzefx.readopt_streams("douze_fx_in_test", mic=False, objs=freres) == 1,
-            "le frère sans cible est rallié (et lui seul)")
-    verifie(("260", "110") in appels and ("261", "111") in appels,
-            f"branché sur le puits de la bande : {appels}")
-    verifie(("-d", "260", "310") in appels, "et débranché de la sortie par défaut")
-    verifie(all("280" not in a for a in appels),
+    viser_avant = douzefx._viser
+    douzefx._viser = lambda flux, serial: vises.append((flux, serial)) or True
+    try:
+        verifie(douzefx.readopt_streams("douze_fx_in_test", mic=False, objs=freres) == 1,
+                "le frère sans cible est rallié (et lui seul)")
+        verifie(vises == [(250, "500")],
+                f"confié à WirePlumber vers le serial de la bande : {vises}")
+        verifie(not appels, f"et AUCUN lien refait à la main : {appels}")
+
+        # Un frère tout juste né (absent de la ronde précédente) n'est pas
+        # touché : on le laisse s'installer.
+        vises.clear()
+        verifie(douzefx.readopt_streams("douze_fx_in_test", mic=False, objs=freres,
+                                        deja_vus=set()) == 0 and not vises,
+                "frère tout juste né : on attend la ronde suivante")
+        frere = next(o for o in freres if o["id"] == 250)
+        frere["info"]["props"]["object.serial"] = 777
+        verifie(douzefx.readopt_streams("douze_fx_in_test", mic=False, objs=freres,
+                                        deja_vus={"777"}) == 1 and vises == [(250, "500")],
+                "déjà vu à la ronde d'avant : rallié")
+    finally:
+        douzefx._viser = viser_avant
+    verifie(all(a[0] != 270 for a in vises),
             "un flux pointé AILLEURS exprès n'est pas touché, même frère")
-    verifie(all("410" not in a for a in appels),
+    verifie(all(a[0] != 400 for a in vises),
             "une appli dont aucun flux ne vise la bande n'est pas touchée")
 
     # Côté micro : on SIGNALE, on ne détourne pas (cf. capteurs_paralleles).
@@ -1151,6 +1204,7 @@ def main():
         test_profils(tmp)
         test_horloge_relance(tmp)
         test_garde_resync(tmp)
+        test_garde_capture_morte()
         test_guerir_resync(tmp)
         test_readoption()
         test_horloge_carte(tmp)

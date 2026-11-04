@@ -964,6 +964,7 @@ def main():
     DEV.start()
     threading.Thread(target=fx_broadcast_loop, daemon=True).start()
     douzefx.GardeResync(soigner_resync).demarrer()
+    douzefx.GardeCaptureMorte().demarrer()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
 
     # ARRÊT PROPRE sur SIGTERM, c'est-à-dire sur `systemctl restart`.

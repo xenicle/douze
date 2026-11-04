@@ -317,7 +317,23 @@ def threads_audio_sans_rt(pid, racine="/proc"):
     return sorted(set(sans)), total
 
 
-def readopt_streams(slug, mic, objs=None):
+def _viser(flux, serial):
+    """Demande à WirePlumber de déplacer le flux `flux` (id) vers le nœud `serial`.
+
+    C'est le chemin d'un « déplacer vers » de pavucontrol (pipewire-pulse pose
+    la même clé) : WirePlumber refait lui-même les liens, et il RETIENT la cible
+    (`state-stream.lua`, `node.stream.restore-target`, vrai par défaut) sous la
+    clé `Output/Audio:application.name:<appli>`. Les flux suivants de l'appli
+    sans cible NAISSENT donc sur la bande : plus rien à déplacer après coup."""
+    try:
+        return subprocess.run([PW_METADATA, str(flux), "target.object",
+                               str(serial), "Spa:Id"], capture_output=True,
+                              text=True, timeout=5).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def readopt_streams(slug, mic, objs=None, deja_vus=None):
     """Rebranche les applications qui VISENT `slug` sans y être reliées.
 
     `mic` dit de quel côté se trouve le nœud : un micro virtuel DONNE aux applis
@@ -340,8 +356,25 @@ def readopt_streams(slug, mic, objs=None):
     touché, ni une appli dont aucun flux ne vise la bande. Côté micro, on s'en
     tient à SIGNALER (cf. `capteurs_paralleles`).
 
+    ⚠️ Les frères ne sont PLUS rebranchés à la main (`pw-link`), mais confiés à
+    WirePlumber (`_viser`), et seulement une fois installés (`deja_vus`). Du
+    10/10 au 04/11/2026, neuf fois sur neuf, « on ne m'entend plus » sur Discord
+    a suivi de quelques secondes un ralliement à la main : Vesktop ouvrait sa
+    capture (en rejoignant un vocal), Douze refaisait les liens de son frère de
+    lecture tout juste né, et la capture n'était plus JAMAIS lue — pipewire-pulse
+    répétait `[vesktop] overrun recover` jusqu'à la relance de Vesktop (relancer
+    Vesktop seul suffisait, vérifié le 04/11). ~930 ralliements sans dégât pour
+    9 pannes : une course pendant l'ouverture des flux, pas un défaut constant.
+    Avec la cible retenue par WirePlumber, le frère naît sur la bande et la
+    course ne se présente plus.
+
     `objs` : photo du graphe déjà prise (ronde de surveillance). Sans elle, on
     relit le graphe en laissant au nœud le temps d'apparaître.
+
+    `deja_vus` : `object.serial` des flux présents à la ronde PRÉCÉDENTE. Un
+    frère absent de cet ensemble vient de naître : on attend la ronde suivante
+    plutôt que de le déplacer pendant que l'appli ouvre encore ses flux. `None`
+    (démarrage d'une bande) : pas d'attente.
 
     Renvoie le nombre d'applications rebranchées.
     """
@@ -398,6 +431,16 @@ def readopt_streams(slug, mic, objs=None):
         siens = [l for l in liens if (l.get("info") or {}).get(cle) == flux]
         if any((l.get("info") or {}).get(autre) == cible["id"] for l in siens):
             continue                       # déjà branché où il faut
+
+        # Tout juste né : WirePlumber est peut-être en train de le brancher
+        # lui-même, et l'appli d'ouvrir ses autres flux. Ronde suivante.
+        if deja_vus is not None and str(p.get("object.serial", "")) not in deja_vus:
+            continue
+
+        if frere and not vise:
+            if serial and _viser(flux, serial):
+                n += 1
+            continue
 
         a, b = ((ses_ports, cote(flux, "in")) if mic
                 else (cote(flux, "out"), ses_ports))
@@ -1692,6 +1735,7 @@ class Supervisor:
         self.vue_lock = threading.Lock()
         self.vue = None               # dernier `list()`, partagé (cf. VUE_TTL)
         self.vue_t = 0.0
+        self._flux_vus = set()        # serials de la ronde précédente (cf. _rallier)
         self.reload()
         threading.Thread(target=self._watch, daemon=True).start()
 
@@ -1709,6 +1753,9 @@ class Supervisor:
         if not bandes:
             return
         objs = _pw_objects()
+        vus, self._flux_vus = self._flux_vus, {
+            str(((o.get("info") or {}).get("props") or {}).get("object.serial", ""))
+            for o in objs if str(o.get("type", "")).endswith("Node")}
         for s in bandes:
             avant = s.capteurs
             s.capteurs = capteurs_paralleles(objs, s.node)
@@ -1716,9 +1763,9 @@ class Supervisor:
                 print(f"[fx] {s.id} : {', '.join(s.capteurs)} capte(nt) AUSSI "
                       f"l'entrée matérielle — ces flux-là ne passent par aucun "
                       f"plugin", flush=True)
-            self._rallier(s, objs)
+            self._rallier(s, objs, vus)
 
-    def _rallier(self, s, objs):
+    def _rallier(self, s, objs, vus=frozenset()):
         """Rebranche sur le puits d'une bande les flux qui l'ont perdu en route.
 
         `readopt_streams` ne passe qu'au DÉMARRAGE de la bande ; or une appli
@@ -1735,7 +1782,7 @@ class Supervisor:
             return
         try:
             slug = "douze_fx_in_" + _slug(s.id)
-            repris = readopt_streams(slug, mic=False, objs=objs)
+            repris = readopt_streams(slug, mic=False, objs=objs, deja_vus=vus)
         finally:
             self.lock.release()
         if repris:
@@ -2281,6 +2328,93 @@ class GardeResync:
     def demarrer(self):
         threading.Thread(target=self._suivre, daemon=True,
                          name="garde-resync").start()
+        return self
+
+
+class GardeCaptureMorte:
+    """Surveille pipewire-pulse : une appli qui ne LIT PLUS sa capture micro.
+
+    Le symptôme (9 fois du 10/10 au 04/11/2026) : « on ne m'entend plus » sur
+    Discord, alors que tout est vert — bande en marche, `douze_fx_mic` relié à
+    Vesktop, signal en sortie. Le flux de capture existe, mais Vesktop n'en lit
+    plus un octet ; pipewire-pulse le dit, et lui seul :
+
+        mod.protocol-pulse: 0x5eb8…: [vesktop] overrun recover read:… avail:… skip:…
+
+    (« overrun » n'existe que pour un flux d'ENREGISTREMENT : le tampon côté
+    serveur déborde parce que le client ne vide plus rien.) Rien ne s'en remet
+    seul : seul relancer l'appli répare (vérifié le 04/11, Douze n'y est pour
+    rien une fois le blocage pris). On ne relance PAS l'appli à la place de
+    l'utilisateur — en plein appel ce serait pire — on le DIT, une fois par flux,
+    au journal et en notification de bureau.
+    """
+
+    MOTIF = re.compile(r"(0x[0-9a-f]+): \[([^\]]*)\] overrun recover")
+    SERIE = 2          # deux débordements du même flux : un seul peut être un hoquet
+    FENETRE = 600.0    # s entre deux débordements d'une même panne (~90 s observés)
+
+    # Pas de notify-send dans le devShell : gdbus (glib) est sur tout NixOS.
+    GDBUS = shutil.which("gdbus") or "/run/current-system/sw/bin/gdbus"
+    JOURNALCTL = GardeResync.JOURNALCTL
+
+    def __init__(self, horloge=time.monotonic, notifier=None):
+        self.horloge = horloge
+        self.notifier = notifier if notifier is not None else self._notifier
+        self.vus = {}            # flux → instant du dernier débordement
+        self.signales = set()
+
+    def _notifier(self, titre, texte):
+        try:
+            subprocess.run([self.GDBUS, "call", "--session",
+                            "--dest", "org.freedesktop.Notifications",
+                            "--object-path", "/org/freedesktop/Notifications",
+                            "--method", "org.freedesktop.Notifications.Notify",
+                            "Douze", "0", "audio-input-microphone", titre, texte,
+                            "[]", "{'urgency': <byte 2>}", "0"],
+                           timeout=5, capture_output=True)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def ligne(self, texte):
+        """Une ligne du journal pipewire-pulse. → True si elle a déclenché l'alerte."""
+        m = self.MOTIF.search(texte)
+        if not m:
+            return False
+        flux, appli = m.group(1), m.group(2) or "une application"
+        t = self.horloge()
+        avant = self.vus.get(flux)
+        self.vus[flux] = t
+        if flux in self.signales or avant is None or t - avant > self.FENETRE:
+            return False
+        self.signales.add(flux)
+        print(f"[fx] ⚠ {appli} ne lit plus sa capture micro (pipewire-pulse : "
+              f"overrun) — on ne t'entend plus. Remède : relancer {appli} "
+              f"(seul ; Douze n'a pas besoin d'être relancé)", flush=True)
+        self.notifier(f"{appli} ne t'entend plus",
+                      f"{appli} a cessé de lire le micro. Relance {appli} "
+                      f"(Douze peut rester tel quel).")
+        return True
+
+    def _suivre(self):
+        while True:
+            try:
+                p = subprocess.Popen(
+                    [self.JOURNALCTL, "--user", "-u", "pipewire-pulse", "-f",
+                     "-n", "0", "-o", "cat"],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                for texte in p.stdout:
+                    try:
+                        self.ligne(texte)
+                    except Exception as e:      # la garde ne doit jamais mourir
+                        print(f"[fx] garde capture : {e}", flush=True)
+                p.wait()
+            except OSError as e:
+                print(f"[fx] garde capture : journalctl injoignable ({e})", flush=True)
+            time.sleep(10)
+
+    def demarrer(self):
+        threading.Thread(target=self._suivre, daemon=True,
+                         name="garde-capture").start()
         return self
 
 

@@ -20,7 +20,9 @@ Usage (exemples) :
     sslctl.py cell 4 8 -10               # accès brut : couche 4, slot 8, -10 dB
     sslctl.py send "ff 01 00 01"         # trame brute (séquences observées !)
 
-Accès non-root : udev/99-douze.rules (TAG uaccess), sinon sudo.
+Accès non-root : udev/99-douze.rules (MODE/GROUP), sinon sudo.
+
+Autre carte : SSL_MODEL=ssl18 (lecture seule tant que non validée, cf. sslmodel.py).
 """
 
 import argparse
@@ -33,10 +35,13 @@ import time
 import usb.core
 import usb.util
 
-VID, PID = 0x31E9, 0x0024
-# Autres modèles SSL (SSL 18 : 0x0026…) : SSL_PID=0x0026 — non validés, `listen`
-# seul est sans risque (cf. README).
-PID = int(os.environ.get("SSL_PID", hex(PID)), 0)
+import sslmodel
+
+VID = 0x31E9
+# Modèle choisi par SSL_MODEL (ssl12 par défaut, ssl18 : PID 0x0026 — protocole
+# NON validé, donc lecture seule, cf. sslmodel.py et docs/SSL18.md). SSL_PID
+# reste accepté pour forcer un PID.
+PID = sslmodel.PID_CONTROLE
 EP_IN, EP_OUT = 0x81, 0x02
 
 UNITY = 1 << 25          # 0 dB (cf. PROTOCOL.md)
@@ -203,8 +208,12 @@ def describe(op, payload):
 # compile en cellules de matrice (PROTOCOL.md). sslctl fait pareil, avec un
 # état persistant dans ~/.config/sslctl/state.json.
 
+# Un fichier d'état PAR modèle : l'état d'une SSL 12 (matrice 8 sorties) n'a rien à
+# faire sur une SSL 18. Pour la SSL 12, le nom historique est conservé.
 STATE_PATH = os.path.join(os.environ.get("XDG_CONFIG_HOME",
-                          os.path.expanduser("~/.config")), "sslctl", "state.json")
+                          os.path.expanduser("~/.config")), "sslctl",
+                          "state.json" if sslmodel.CLE == "ssl12"
+                          else f"state-{sslmodel.CLE}.json")
 
 # canaux du mixer logique : mono (slot) ou stéréo (slot L, slot R)
 CHANNELS = {"1": {"slots": (8,)}, "2": {"slots": (9,)},
@@ -322,11 +331,22 @@ def mutate_channel(ch, **updates):
 
 # ---------------------------------------------------------------- transport
 
+def refuser_ecriture_non_validee():
+    """Jamais d'octets inventés vers un firmware dont on n'a rien capturé."""
+    if sslmodel.ECRITURE_AUTORISEE:
+        return
+    sys.exit(f"{sslmodel.NOM} : protocole de contrôle NON validé — écriture refusée.\n"
+             "  Toutes les trames de Douze viennent de captures d'une SSL 12.\n"
+             "  Lecture seule : `info`, `diag`, `listen --raw`. Pour guider les captures :\n"
+             "  docs/SSL18.md. Écrire quand même (à vos risques, avec l'accord de la\n"
+             "  personne qui possède la carte) : SSL_ALLOW_UNVALIDATED=1.")
+
+
 class SSL12:
     def __init__(self):
         self.dev = usb.core.find(idVendor=VID, idProduct=PID)
         if self.dev is None:
-            sys.exit(f"SSL Control I/F (31e9:{PID:04x}) introuvable — SSL 12 branchée ?")
+            sys.exit(f"SSL Control I/F (31e9:{PID:04x}) introuvable — {sslmodel.NOM} branchée ?")
         # ⚠️ NE PAS appeler `set_configuration()` sans vérifier d'abord.
         #
         # C'est une requête au niveau du PÉRIPHÉRIQUE : elle réussit même quand
@@ -351,6 +371,7 @@ class SSL12:
                      "  • sinon : règle udev/99-douze.rules, ou lancer avec sudo.")
 
     def write(self, data):
+        refuser_ecriture_non_validee()
         self.dev.write(EP_OUT, data, timeout=1000)
 
     def read_chunks(self, secs):
@@ -396,6 +417,56 @@ def cmd_info(_a):
                     print(f"    EP {ep.bEndpointAddress:#04x}  "
                           f"{kind[[usb.util.ENDPOINT_TYPE_BULK, usb.util.ENDPOINT_TYPE_INTR, usb.util.ENDPOINT_TYPE_ISO, usb.util.ENDPOINT_TYPE_CTRL].index(t)]}"
                           f"  {ep.wMaxPacketSize} o")
+
+
+def cmd_diag(_a):
+    """Rapport LECTURE SEULE à coller dans un ticket : USB, nœuds PipeWire, profil.
+
+    N'ouvre aucune interface USB et n'écrit rien : seulement lsusb-like via pyusb
+    (descripteurs en cache) et `pw-link -o` / `wpctl status`."""
+    import shutil
+    import subprocess
+    print(f"modèle choisi : {sslmodel.NOM} (SSL_MODEL={sslmodel.CLE}), "
+          f"PID de contrôle 0x{PID:04x}")
+    print(f"protocole validé : {'oui' if sslmodel.VALIDE else 'NON (écritures refusées)'}")
+    print()
+    devs = list(usb.core.find(find_all=True, idVendor=VID))
+    if not devs:
+        print("USB : aucun périphérique 31e9 (Solid State Logic) — carte branchée ?")
+    for dev in devs:
+        try:
+            produit = usb.util.get_string(dev, dev.iProduct) or "?"
+        except (usb.core.USBError, ValueError, NotImplementedError):
+            produit = "? (lecture refusée : règle udev ?)"
+        print(f"USB 31e9:{dev.idProduct:04x}  bus {dev.bus} addr {dev.address}  "
+              f"bcdDevice {dev.bcdDevice:#06x}  « {produit} »")
+    print()
+    pw = shutil.which("pw-link")
+    if pw:
+        try:
+            sortie = subprocess.run([pw, "-o"], capture_output=True, text=True,
+                                    timeout=5).stdout
+        except (OSError, subprocess.TimeoutExpired) as e:
+            sortie = ""
+            print(f"pw-link a échoué : {e}")
+        noeuds = sorted({l.strip().split(":", 1)[0] for l in sortie.splitlines()
+                         if l.strip().startswith("alsa_") and ("Solid_State" in l or "SSL" in l)})
+        print("Nœuds PipeWire SSL :" + ("" if noeuds else " aucun (profil Pro Audio ?)"))
+        for n in noeuds:
+            print(f"  {n}")
+    else:
+        print("pw-link introuvable — PipeWire installé ?")
+    wp = shutil.which("wpctl")
+    if wp:
+        try:
+            st = subprocess.run([wp, "status"], capture_output=True, text=True,
+                                timeout=5).stdout
+            print("\nwpctl status (lignes SSL) :")
+            for l in st.splitlines():
+                if "SSL" in l or "Solid" in l:
+                    print(f"  {l.strip()}")
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 def cmd_init(_a):
@@ -684,6 +755,8 @@ def main():
 
     sub.add_parser("info").set_defaults(fn=cmd_info)
     sub.add_parser("init").set_defaults(fn=cmd_init)
+    sub.add_parser("diag", help="rapport lecture seule (USB + PipeWire) pour un ticket"
+                   ).set_defaults(fn=cmd_diag)
 
     p = sub.add_parser("listen")
     p.add_argument("--secs", type=float, default=30)

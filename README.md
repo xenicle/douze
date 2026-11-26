@@ -109,6 +109,8 @@ Other distributions: copy `udev/99-douze.rules` to `/etc/udev/rules.d/`, then
 sudo udevadm control --reload && sudo udevadm trigger
 ```
 
+The rules file also covers the SSL 18 control interface (`31e9:0026`).
+
 Make sure you are in the `audio` group (`id -nG`), then **replug the card**.
 
 **Check it worked:**
@@ -328,6 +330,14 @@ rebuilding — only a dependency change needs one.
 > `env -u LD_LIBRARY_PATH -u PYTHONPATH -u GI_TYPELIB_PATH python3 tools/douze-app.py`.
 > Inherited library paths from a different nixpkgs make it die on importing
 > Pango. The generated `.desktop` entry already does this.
+
+## Other cards: SSL 18
+
+The control protocol was mapped on the SSL 12 only. For the SSL 18
+(`31e9:0026`) Douze runs in a **read-only, effects-only mode**
+(`SSL_MODEL=ssl18`): no byte is ever sent to the card, but Douze FX (EQ,
+compressor… as VST3 in the PipeWire graph) works as usual. Status, how to try it
+and how to help with captures: [docs/SSL18.md](docs/SSL18.md).
 
 ## Douze FX (plugin host)
 

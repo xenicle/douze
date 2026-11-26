@@ -13,13 +13,29 @@
 # La carte doit être branchée ET en profil « Pro Audio » : c'est le seul profil
 # qui expose les 8 canaux de lecture (pro-output-0). Sans lui, il n'y a rien à
 # découper, et le dire tout de suite évite de chercher la panne ailleurs.
+#
+# SSL 18 : SSL_MODEL=ssl18 tools/install-pipewire.sh — n'installe que la règle
+# anti-veille (les sinks pb12…pb78 sont propres à la SSL 12, cf. docs/SSL18.md).
 set -euo pipefail
+
+modele_carte="${SSL_MODEL:-ssl12}"
 
 ici="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 modele="$ici/pipewire/99-ssl12-sinks.conf"
 regle="$ici/wireplumber/51-ssl12-no-suspend.conf"
 dest_wp="${XDG_CONFIG_HOME:-$HOME/.config}/wireplumber/wireplumber.conf.d/51-ssl12-no-suspend.conf"
 dest="${XDG_CONFIG_HOME:-$HOME/.config}/pipewire/pipewire.conf.d/99-ssl12-sinks.conf"
+
+if [[ "$modele_carte" == "ssl18" ]]; then
+  mkdir -p "$(dirname "$dest_wp")"
+  cp "$regle" "$dest_wp"
+  echo "écrit : $dest_wp (les nœuds SSL ne seront plus mis en veille)"
+  echo "SSL 18 : pas de sinks stéréo à installer (ils sont propres à la SSL 12)."
+  echo
+  echo "Reste à recharger PipeWire :"
+  echo "    systemctl --user restart pipewire pipewire-pulse wireplumber"
+  exit 0
+fi
 
 if [[ ! -r "$modele" ]]; then
   echo "modèle introuvable : $modele" >&2

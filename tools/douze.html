@@ -330,7 +330,7 @@ stroke-linecap='round' stroke-linejoin='round'/></svg>");
 </head>
 <body>
 <header>
-  <div class="brand"><b>Douze</b><span>SSL 12</span></div>
+  <div class="brand"><b>Douze</b><span id="modele">SSL 12</span></div>
   <div class="stat"><span class="dot" id="conn"></span><span id="connlbl">Connectée</span></div>
   <div class="stat mono" id="clock">— kHz</div>
   <!-- La carte ne tourne pas à la fréquence que le PC croit (vécu le 28/09/2026 :
@@ -499,7 +499,7 @@ const I18N = {
        followhpa: "Casque A suit le mix Monitor (Follow Mix 1-2)",
        userbtns: "Boutons de façade — fonction",
        hwnote: "<b>Synchro façade</b> — les boutons physiques CUT · ALT · TALK remontent ici en direct.",
-       connected: "Connectée", disconnected: "Déconnectée", devlost: "Device déconnecté",
+       connected: "Connectée", disconnected: "Déconnectée", devlost: "Device déconnecté", unvalidated: "Effets seulement (protocole non validé)",
        theme_light: "Clair", theme_dark: "Sombre",
        mic: "micro", lineinst: "ligne / inst", loopnone: "Aucun", loopmon: "Bus Monitor",
        profile: "Profil", save: "Enregistrer", profname: "Nom du profil :",
@@ -563,7 +563,7 @@ const I18N = {
        followhpa: "Headphones A follow the Monitor mix (Follow Mix 1-2)",
        userbtns: "Front-panel buttons — function",
        hwnote: "<b>Front-panel sync</b> — the hardware CUT · ALT · TALK buttons show up here live.",
-       connected: "Connected", disconnected: "Disconnected", devlost: "Device disconnected",
+       connected: "Connected", disconnected: "Disconnected", devlost: "Device disconnected", unvalidated: "Effects only (control protocol not validated)",
        theme_light: "Light", theme_dark: "Dark",
        mic: "mic", lineinst: "line / inst", loopnone: "None", loopmon: "Monitor bus",
        profile: "Profile", save: "Save", profname: "Profile name:",
@@ -970,7 +970,14 @@ function startEvents() {
   };
   // Le démon survit au débranchement de la carte : la page peut s'ouvrir (ou
   // se reconnecter) pendant qu'elle est sur un autre ordinateur.
-  const carte = st => { if (st && st._device === false) etat(true, "devlost"); return st; };
+  const carte = st => {
+    if (st && st._modele) document.getElementById("modele").textContent = st._modele.nom;
+    // Modèle dont le protocole n'est pas validé (SSL 18) : le démon ne parle pas
+    // à la carte exprès — ce n'est pas une panne, on ne grise pas la console.
+    if (st && st._modele && !st._modele.valide) etat(false, "unvalidated");
+    else if (st && st._device === false) etat(true, "devlost");
+    return st;
+  };
   es.onopen = () => { etat(false, "connected");
                       fetch("/state").then(r => r.json()).then(carte).then(refresh); };
   es.onerror = () => etat(true, "disconnected");

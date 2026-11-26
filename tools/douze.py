@@ -27,6 +27,7 @@ import usb.util
 
 import douzefx
 import sslctl
+import sslmodel
 from sslctl import (BOOL_CTRL, LOOPBACK, MASTER_INST, BUS_LAYERS,
                     USER_BUTTONS, USER_FN, user_msgs, led_group_for, altspk_msgs,
                     follow_msgs,
@@ -69,14 +70,13 @@ DIR_DEST = {"pb12": "mix", "pb34": "line34", "pb56": "hpa", "pb78": "hpb"}
 # écrit en dur ici, ce qui ne pouvait marcher que sur une seule machine au monde.
 # On le cherche donc dans le graphe.
 PW_LINK = shutil.which("pw-link") or "/run/current-system/sw/bin/pw-link"
-SSL_ALSA_MOTIF = re.compile(
-    r"^alsa_output\.usb-Solid_State_Logic_SSL_12_.*\.pro-output-0$")
+SSL_ALSA_MOTIF = re.compile(sslmodel.MODELE["noeud_alsa"])
 LOOPBACK_PORTS = [("pb12", 0), ("pb12", 1), ("pb34", 2), ("pb34", 3),
                   ("pb56", 4), ("pb56", 5), ("pb78", 6), ("pb78", 7)]
 
 
 def trouver_noeud_ssl():
-    """Nom du nœud ALSA de la SSL 12 en profil Pro Audio, ou None.
+    """Nom du nœud ALSA de la carte (SSL_MODEL) en profil Pro Audio, ou None.
 
     Le profil compte : seul « pro-output-0 » expose les 8 canaux de lecture. Une
     carte laissée en profil duplex stéréo n'a pas ces ports du tout, et c'est un
@@ -111,6 +111,9 @@ def ensure_pw_links():
                       "sélectionné ?) — nouvelle tentative", flush=True)
             time.sleep(2)
             continue
+
+        if not sslmodel.MODELE["sinks_stereo"]:
+            return True         # pas de sinks ssl12.pbXX à relier pour ce modèle
 
         missing = 0
         for name, ch in LOOPBACK_PORTS:
@@ -303,7 +306,28 @@ class Device(threading.Thread):
                 self.stats["ops"][key] = self.stats["ops"].get(key, 0) + 1
                 self.dispatch(op, payload)
 
+    def _sans_usb(self):
+        """Modèle dont le protocole n'est PAS validé : on ne touche pas à l'USB.
+
+        Ni réclamation d'interface, ni handshake, ni keepalive : toutes nos
+        trames viennent d'une SSL 12 et rien ne dit ce qu'une autre carte en
+        ferait. Reste ce qui ne dépend pas du protocole : Douze FX (effets dans
+        le graphe PipeWire), l'auto-réparation des liens, l'anti-veille."""
+        print(f"{sslmodel.NOM} : protocole de contrôle non validé — Douze ne "
+              f"touche pas à l'USB (effets et routage PipeWire seulement). "
+              f"Voir docs/SSL18.md", flush=True)
+        if self.au_branchement:
+            try:
+                self.branchements += 1
+                self.au_branchement(True)
+            except Exception as e:                    # jamais fatal
+                print(f"{sslmodel.NOM} : démarrage des bandes : {e}", flush=True)
+        self.fin.wait()
+
     def run(self):
+        if not sslmodel.VALIDE:
+            self._sans_usb()
+            return
         self._keepalive = threading.Thread(target=self.keepalive, daemon=True)
         self._keepalive.start()
         prevenu = False
@@ -489,6 +513,7 @@ def fx_broadcast_loop():
 
 BUS = EventBus()
 DEV = None
+MODELE_INFO = {"nom": sslmodel.NOM, "id": sslmodel.CLE, "valide": sslmodel.VALIDE}
 STATE_LOCK = threading.Lock()   # sérialise les load-modify-save de state.json
 FX = douzefx.Supervisor()       # bandes d'effets (processus Douze FX)
 SCAN = douzefx.Scanner()        # catalogue de plugins (scan hors-process)
@@ -720,6 +745,7 @@ def apply_cmd(c):
     st["_clock"] = DEV.clock
     st["_clock_mismatch"] = DEV.clock_mismatch
     st["_device"] = DEV.present
+    st["_modele"] = MODELE_INFO
     st["_profiles"] = list_profiles()
     BUS.push({"ev": "state", "state": st})   # sync live de toutes les pages
     return st
@@ -863,6 +889,7 @@ class Handler(BaseHTTPRequestHandler):
             st["_clock"] = DEV.clock
             st["_clock_mismatch"] = DEV.clock_mismatch
             st["_device"] = DEV.present
+            st["_modele"] = MODELE_INFO
             st["_profiles"] = list_profiles()
             self.send_json(st)
         elif self.path == "/manifest.json":

@@ -1174,6 +1174,59 @@ def test_enumeration_plugins():
             "on ne descend pas DANS les bundles (sinon on trouverait le binaire deux fois)")
 
 
+def test_modeles():
+    """SSL_MODEL : la SSL 18 n'écrit jamais sur l'USB tant qu'elle n'est pas validée."""
+    import subprocess
+    print("[modèles de cartes]")
+    ici = os.path.dirname(os.path.abspath(__file__))
+
+    def sonde(env, code):
+        e = {**os.environ, **env}
+        for k in ("SSL_MODEL", "SSL_PID", "SSL_ALLOW_UNVALIDATED"):
+            if k not in env:
+                e.pop(k, None)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, cwd=ici, env=e, timeout=30)
+        return r.returncode, (r.stdout + r.stderr)
+
+    code = ("import sslmodel,sslctl;"
+            "print(sslmodel.CLE,sslmodel.VALIDE,hex(sslctl.PID),"
+            "sslmodel.ECRITURE_AUTORISEE)")
+    rc, out = sonde({}, code)
+    verifie(out.split() == ["ssl12", "True", "0x24", "True"],
+            f"défaut = SSL 12 validée, PID 0x24 ({out.strip()})")
+    rc, out = sonde({"SSL_MODEL": "ssl18"}, code)
+    verifie(out.split() == ["ssl18", "False", "0x26", "False"],
+            f"SSL 18 = PID 0x26, non validée, écriture refusée ({out.strip()})")
+    rc, out = sonde({"SSL_MODEL": "ssl18", "SSL_ALLOW_UNVALIDATED": "1"}, code)
+    verifie(out.split()[-1] == "True", "SSL_ALLOW_UNVALIDATED=1 lève le refus")
+    rc, out = sonde({"SSL_PID": "0x0026"}, code)
+    verifie(out.split()[1:2] == ["False"],
+            "SSL 12 avec un autre PID forcé : plus validée")
+    rc, out = sonde({"SSL_MODEL": "ssl99"}, code)
+    verifie(rc != 0 and "inconnu" in out, "modèle inconnu : refus net")
+    rc, out = sonde({"SSL_MODEL": "ssl18"},
+                    "import sslctl\n"
+                    "class Faux:\n"
+                    "    def write(*a, **k): raise AssertionError('ECRIT')\n"
+                    "d = sslctl.SSL12.__new__(sslctl.SSL12); d.dev = Faux()\n"
+                    "d.write(b'x')")
+    verifie(rc != 0 and "NON validé" in out and "ECRIT" not in out,
+            "SSL12.write refuse avant d'atteindre l'USB")
+    rc, out = sonde({"SSL_MODEL": "ssl18"},
+                    "import douze,threading,usb.core,time\n"
+                    "vus=[]; usb.core.find=lambda *a,**k: vus.append(1)\n"
+                    "douze.ensure_pw_links=lambda: True\n"
+                    "d=douze.Device(douze.BUS, lambda p: vus.append('b'))\n"
+                    "d.start(); time.sleep(0.4); d.fin.set(); time.sleep(0.2)\n"
+                    "print(vus, d.present)")
+    verifie("['b'] False" in out,
+            f"démon SSL 18 : zéro accès USB, bandes démarrées ({out.strip()[-40:]})")
+    rc, out = sonde({"SSL_MODEL": "ssl18"},
+                    "import douze;print(douze.SSL_ALSA_MOTIF.pattern)")
+    verifie("SSL_18" in out, "SSL 18 : le motif du nœud ALSA suit le modèle")
+
+
 def main():
     import douzefx
 
@@ -1210,6 +1263,7 @@ def main():
         test_horloge_carte(tmp)
         test_scan_amorcage(tmp)
         test_enumeration_plugins()
+        test_modeles()
 
     print(f"\n=== {TOTAL - len(ECHECS)}/{TOTAL} vérification(s) OK", end=" ")
     print("— tout passe ===" if not ECHECS else f"— ÉCHEC ===\n{chr(10).join(ECHECS)}")

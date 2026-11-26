@@ -98,6 +98,7 @@ ff | opcode (1 o) | len (1 o) | payload (len octets) | checksum (1 o)
 | `0x6b` | OUT | 2 408 | **opération sur paramètre** (get/set — cœur du protocole) |
 | `0x6c` | IN | 321 | réponse/notification paramètre (dont flux vumètres) |
 | `0x04` | IN | 18 | inconnu (paires `9d 01`/`a0 01`) |
+| `0x22` | IN | — | appui d'un bouton USER réglé sur « 360° GUI » : payload `GG 00 VV`, GG = groupe LED du bouton (`0c` CUT, `0d` ALT, `0e` TALK), VV = `01` appui / `00` relâché. Observé sur le device (firmware 1.41, 26/10/2026), hors capture SSL 360 |
 
 ### Structure des messages paramètre `0x6b` (OUT) / `0x6c` (IN)
 
@@ -126,8 +127,9 @@ Index calibrés les 17/08/2026 (tests aux tonalités, v2 corrigée) :
 0–3 = Analogue 1–4 ; 12/13 = Pb 1-2 ; **bus contigus 14–21** : 14/15 = Line
 3-4, 16/17 = HP A, 18/19 = HP B, 20/21 = Monitor (post-master : le meter suit
 le master fader du bus) ; 22/23 = Pb 3-4, 24/25 = Pb 5-6, 26/27 = Pb 7-8
-(présumé) ; 28 = ? ; 4–11 = silencieux dans tous les tests (loopback compris),
-probablement réservés.
+(présumé) ; **28 = micro talkback** (observé le 26/10/2026, firmware 1.41 :
+monte avec la voix pendant TALK, à zéro sinon) ; 4–11 = silencieux dans tous
+les tests (loopback compris), probablement réservés.
 
 - **ACK asymétrique** : les sets continus (sub 06) ne déclenchent aucune
   réponse (capture 04 : 153 sets, rien) ; les sets booléens (sub 04) reçoivent
@@ -233,7 +235,7 @@ MONO, fader, meters. **Monitor Bus** : MASTER FADER, meters.
 | sub 06 (u32 gain) | 1 | matrice de gains | 30×couche + slot |
 | | 3 | DIM LEVEL | 0 |
 | | 6 | ALT SPK TRIM | 2 |
-| | 9 | fader master de bus | bus : 0=Monitor, 2=Line 3-4 (confirmé au meter 17/08), 4=HP A, 6=HP B |
+| | 9 | fader master de bus | bus : 0=Monitor, 2=Line 3-4 (confirmé au meter 17/08), 4=HP A, 6=HP B ; **3 = sortie Line 4 seule** (voir ci-dessous) |
 | sub 04 (bool, ACK) | 1 | 48V | canal 0–3 |
 | | 2 | filtre passe-haut | canal 0–3 |
 | | 3 | Line/Inst | canal (2–3) |
@@ -246,11 +248,46 @@ MONO, fader, meters. **Monitor Bus** : MASTER FADER, meters.
 | sub 07 (bool, sans ACK) | 2 | MONO bus | bus |
 | | 4 | CUT bus | bus |
 | | 5 | ALT SPK ENABLE | 2 |
-| | 7 | FOLLOW MIX 1-2 | bus |
+| | 7 | FOLLOW MIX 1-2 | bus (2 = Line **3** seule, 3 = Line **4** seule) |
 | | 0x20 | lié à ALT SPK (sorties 3/4 ?) | 2, 3 |
 | sub 08 (enum u16) | 11 | LOOPBACK SOURCE | 0 |
 | | 12 | boutons USER (fonction) | bouton 0–2 |
 | *(non identifiés, vus dans le dump profil — capture 24)* | sub 07 : 0x0d, 0x0e, 0x1f ; sub 08 : 0x0a, 0x10, 0x1a ; sub 06 : 0x08, 0x1c | réglages SETTINGS / horloge / I/O mode probables | |
+
+**Line 3-4 = deux sorties mono, pas une paire** (observé le 27/10/2026 sur
+firmware 1.41, musique en Pb 1-2, vumètres 14/15) : FOLLOW MIX 1-2 sur
+l'instance 2 seule → sortie 3 suit le mix (L), sortie 4 muette ; l'instance 3
+en plus → la 4 suit (R). Fader master (ctrl 9) −20 dB sur l'instance 3 → seul
+le vumètre 15 baisse de 20 dB. HP A et HP B, eux, suivent en stéréo depuis leur
+seule instance (4, 6). CUT bus (ctrl 4) n'a d'effet visible sur aucun vumètre,
+pas même sur l'instance 2 : les vumètres de bus sont pris avant le CUT, donc
+l'effet de l'instance 3 sur le CUT reste à vérifier à l'oreille.
+
+**FOLLOW MIX 1-2 l'emporte sur les cellules du bus** (observé le 27/10/2026,
+firmware 1.41) : bus suivant le mix, ses couches restent une copie du mix
+1-2 quoi qu'on écrive dans ses cellules. Ton −40 dBFS en Pb 7-8 (vumètre 26/27
+= 327), DIR Pb 7-8 → HP B (cellules pb78 → couches 6/7 à 0 dB) : FOLLOW HP B
+actif → vumètres 18/19 = le mix (≈ 13 800), le ton n'y est pas ; FOLLOW coupé
+→ 18/19 = 327 / 327. Même chose pour un send : Pb 1-2 envoyé vers Line 3-4
+panoramiqué sur la sortie 3 (qui suit) ne change pas le vumètre 14. Un DIR ou
+des sends vers un bus n'ont donc d'effet que FOLLOW coupé sur la sortie
+concernée.
+
+**Talkback = injection après la matrice** (observé le 27/10/2026, firmware
+1.41, TALK actif, voix sur le micro talkback = vumètre 28) : HP B avec FOLLOW
+coupé et aucune cellule ouverte porte quand même la voix, à exactement le
+niveau du vumètre 28, des deux côtés ; Line 3-4 aussi (14/15 = 28). Ouvrir à
+−20 dB les slots inconnus (12, 13, 14–29) dans les couches HP B n'y change
+rien de mesurable. Le talkback n'est donc pas une source de la matrice : le
+firmware l'ajoute en sortie de bus, d'où l'absence de trames côté SSL 360
+(captures 16/16b). **Anomalie HP A droite** : sur le même device, HP A L = 28
+mais HP A R = 9,3 × 28 (+19,4 dB) en continu, FOLLOW actif ou non, et même
+avec les cellules de la couche 5 mises à 0 sur tous les slots inconnus ; la
+musique, elle, est équilibrée sur HP A. Gain talkback par sortie interne au
+firmware, non identifié ; candidats non vérifiés : les gains anonymes sub 06
+0x08 / 0x1c du dump profil (capture 24). Attention : un get (sub 03) sur
+0x03, 0x06, 0x08, 0x09 répond en sub 05 avec ces numéros de contrôle, que
+le démon prenait pour des boutons (corrigé : instances filtrées).
 
 L'opcode `0x13` (payload `01 groupe état`) double certains booléens : CUT →
 groupe 0x0c, ALT → groupe 0x0d — vraisemblablement les **LED des boutons

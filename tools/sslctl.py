@@ -51,7 +51,13 @@ STRIDE = 30              # taille d'une couche de la matrice
 BOOL_CTRL = {"48v": 1, "hpf": 2, "inst": 3, "invert-l": 4, "mono": 5,
              "dim": 6, "cut": 7, "alt": 8, "talk": 9, "phase": 0x0F}
 LED_GROUP = {"cut": 0x0C, "alt": 0x0D, "talk": 0x0E}   # LED pilotées par le host
-MASTER_INST = {"monitor": 0, "line34": 2, "hp-a": 4, "hp-b": 6}
+# Instance des masters (fader ctrl 9, modes sub 07) par bus. HP A / HP B sont
+# stéréo sur une seule instance ; Line 3-4, elles, sont deux sorties mono :
+# l'instance 2 ne règle que la sortie 3, la 4 est l'instance 3 (« line4 »).
+# Établi sur le device le 27/10/2026 (firmware 1.41, vumètres 14/15) :
+# FOLLOW et fader master agissent sortie par sortie. SSL 360 n'a été capturé
+# que sur l'instance 2 ; « line34 » garde son nom pour ne rien casser.
+MASTER_INST = {"monitor": 0, "line34": 2, "line4": 3, "hp-a": 4, "hp-b": 6}
 LOOPBACK = {"none": 0, "pb12": 1, "pb34": 2, "pb56": 3, "pb78": 4,
             "monitor": 5, "line34": 6, "hpa": 7, "hpb": 8}
 # Fonction USER → valeur sur le fil. Ce n'est **pas** l'ordre du menu de SSL 360
@@ -219,11 +225,15 @@ STATE_PATH = os.path.join(os.environ.get("XDG_CONFIG_HOME",
 CHANNELS = {"1": {"slots": (8,)}, "2": {"slots": (9,)},
             "3": {"slots": (10,)}, "4": {"slots": (11,)},
             "pb12": {"slots": (0, 1)}, "pb34": {"slots": (2, 3)},
-            "pb56": {"slots": (4, 5)}, "pb78": {"slots": (6, 7)}}
+            "pb56": {"slots": (4, 5)}, "pb78": {"slots": (6, 7)},
+            # ADAT 1-8, PRÉSUMÉ : les 8 slots mono 14–21 que SSL 360 remet à
+            # -3 dB au dé-AFL (capture 20). Jamais confirmé avec une source
+            # optique branchée ; fermés par défaut, comme les playbacks 3-8.
+            **{f"a{i}": {"slots": (13 + i,)} for i in range(1, 9)}}
 # défaut = profil par défaut de SSL 360 (capture 20) : analogues et pb12 à
 # 0 dB centre dans le mix, les autres playbacks fermés
 DEFAULT_CH = {"fader": 0.0, "pan": 0.0, "mute": False, "solo": False}
-DEFAULT_OFF = {"pb34", "pb56", "pb78"}
+DEFAULT_OFF = {"pb34", "pb56", "pb78"} | {f"a{i}" for i in range(1, 9)}
 SEND_BUSES = ("hpa", "hpb", "line34")   # cibles de `route` (mix = fader)
 
 
@@ -285,21 +295,36 @@ def compile_mix(st):
     return cells
 
 
-def send_cells(ch, bus, level):
+def pan_db(n_slots, pan):
+    """Atténuation (dB_L, dB_R) d'un pan −100…100, mêmes lois que compile_mix :
+    mono = puissance constante, −3 dB au centre (capture 12) ; stéréo =
+    balance, 0 dB au centre (loi présumée)."""
+    pan = max(-100.0, min(100.0, float(pan)))
+    if n_slots == 1:
+        theta = (pan + 100) / 200 * math.pi / 2
+        return (20 * math.log10(max(math.cos(theta), 1e-9)),
+                20 * math.log10(max(math.sin(theta), 1e-9)))
+    att = 20 * math.log10(max(math.cos(abs(pan) / 100 * math.pi / 2), 1e-9))
+    return (att if pan > 0 else 0.0, att if pan < 0 else 0.0)
+
+
+def send_cells(ch, bus, level, pan=0.0):
     """Cellules (instance, valeur) d'une route send canal → bus.
 
     Indépendant du mute/solo du canal (comportement SSL 360 observé :
-    le cut n'écrit que les couches mix). Mono : -3 dB centre ; stéréo :
-    niveau plein sur chaque côté (capture 19)."""
+    le cut n'écrit que les couches mix). Au centre : mono -3 dB de chaque
+    côté, stéréo niveau plein (captures 18b et 19). Le pan du send suit les
+    lois du mix (pan_db) : SSL 360 en a un par send, jamais capturé actif
+    (18b : bouton pan désactivé) — mais la cellule reste « niveau + pan »,
+    la règle établie. Sur Line 3-4, deux sorties mono, il choisit la sortie."""
     slots = CHANNELS[ch]["slots"]
     lL, lR = BUS_LAYERS[bus]
     if level == "off":
         vL = vR = 0
-    elif len(slots) == 1:
-        v = db_to_val(float(level) + 20 * math.log10(math.cos(math.pi / 4)))
-        vL = vR = v
     else:
-        vL = vR = db_to_val(float(level))
+        dL, dR = pan_db(len(slots), pan)
+        vL = db_to_val(float(level) + dL)
+        vR = db_to_val(float(level) + dR)
     if len(slots) == 1:
         s = slots[0]
         return [(STRIDE * lL + s, vL), (STRIDE * lR + s, vR)]
@@ -307,11 +332,15 @@ def send_cells(ch, bus, level):
     return [(STRIDE * lL + sL, vL), (STRIDE * lR + sR, vR)]
 
 
+def send_pan(st, ch, bus):
+    return st.get("send_pans", {}).get(ch, {}).get(bus, 0.0)
+
+
 def compile_sends(st):
     cells = []
     for ch, buses in st.get("sends", {}).items():
         for bus, level in buses.items():
-            cells += send_cells(ch, bus, level)
+            cells += send_cells(ch, bus, level, send_pan(st, ch, bus))
     return cells
 
 
@@ -661,7 +690,8 @@ def cmd_route(a):
             a.level if a.level == "off" else float(a.level)
     save_state(st)
     d = SSL12()
-    d.write(b"".join(msg_gain(1, i, v) for i, v in send_cells(a.ch, a.bus, a.level)))
+    d.write(b"".join(msg_gain(1, i, v)
+                     for i, v in send_cells(a.ch, a.bus, a.level, send_pan(st, a.ch, a.bus))))
     print(f"route {a.ch} → {a.bus} : {a.level}")
 
 

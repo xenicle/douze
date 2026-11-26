@@ -56,7 +56,10 @@ def test_rack_hors_ligne(tmp):
     print("[test] édition du rack bande ARRÊTÉE")
     import douzefx
 
-    rack = os.path.join(tmp, "rack.json")
+    # Un rack n'est accepté que dans <config>/racks (cf. douzefx.rack_sur).
+    douzefx.CONFIG_DIR = tmp
+    os.makedirs(douzefx.racks_dir(), exist_ok=True)
+    rack = os.path.join(douzefx.racks_dir(), "rack.json")
     with open(rack, "w") as f:
         json.dump({"version": 1, "bypass": False, "stages": []}, f)
 
@@ -105,6 +108,26 @@ def test_memoire_ecoute_directe(tmp):
             "relue par une NOUVELLE instance (donc survit au redémarrage du démon)")
 
 
+def test_rack_borne(tmp):
+    print("[test] un rack hors de <config>/racks est refusé")
+    import douzefx
+
+    douzefx.CONFIG_DIR = tmp
+    cible = os.path.join(tmp, "victime.txt")
+    with open(cible, "w") as f:
+        f.write("ne pas toucher")
+    bande = douzefx.Strip({"id": "x", "name": "X", "rack": cible,
+                           "source": {}, "dest": {}}, 91)
+    verifie(not bande.chain_add("/un.vst3"), "chain_add refusé sur un fichier hors racks")
+    with open(cible) as f:
+        verifie(f.read() == "ne pas toucher", "le fichier visé est intact")
+    for autre in ("../victime.json", os.path.join(tmp, "racks", "..", "v.json"),
+                  os.path.join(tmp, "racks", "pas-json.txt")):
+        verifie(douzefx.rack_sur(autre) == "", f"refusé : {autre}")
+    verifie(douzefx.rack_sur(os.path.join(tmp, "racks", "ok.json")) != "",
+            "accepté : <config>/racks/ok.json")
+
+
 def test_config_bandes(tmp):
     print("[test] config des bandes : recâblage et fantômes")
     import douzefx
@@ -116,10 +139,10 @@ def test_config_bandes(tmp):
     douzefx.LOG_DIR = tmp
     with open(douzefx.STRIPS_PATH, "w") as f:
         json.dump({"strips": [
-            {"id": "a", "name": "A", "rack": os.path.join(tmp, "a.json"),
+            {"id": "a", "name": "A", "rack": os.path.join(tmp, "racks", "a.json"),
              "source": {"client": "SSL 12 Pro", "channels": [1]},
              "dest": {"kind": "virtualmic", "name": "A"}, "cut_direct": ["1"]},
-            {"id": "b", "name": "B", "rack": os.path.join(tmp, "b.json"),
+            {"id": "b", "name": "B", "rack": os.path.join(tmp, "racks", "b.json"),
              "source": {"client": "X", "channels": [1, 2]},
              "dest": {"kind": "jack", "client": "Y", "channels": [1, 2]}},
         ]}, f)
@@ -147,7 +170,7 @@ def test_config_bandes(tmp):
 
     # Le rack ne doit PAS être touché par un recâblage : c'est ce qui sépare
     # « corriger la source » de « refaire la bande ».
-    verifie(sup.get("a").cfg["rack"] == os.path.join(tmp, "a.json"),
+    verifie(sup.get("a").cfg["rack"] == os.path.join(tmp, "racks", "a.json"),
             "le rack survit au recâblage")
 
     # strips.json édité à la main hors de Douze : la bande disparue ne doit pas
@@ -235,7 +258,8 @@ def test_profils(tmp):
     douzefx.PROFILES_DIR = os.path.join(tmp, "profiles")
     douzefx.LOG_DIR = tmp
 
-    rack_a = os.path.join(tmp, "pa.json")
+    os.makedirs(douzefx.racks_dir(), exist_ok=True)
+    rack_a = os.path.join(douzefx.racks_dir(), "pa.json")
     with open(rack_a, "w") as f:
         json.dump({"version": 1, "bypass": False,
                    "stages": [{"path": "/x/Comp.vst3", "name": "Comp"}]}, f)
@@ -265,7 +289,7 @@ def test_profils(tmp):
 
     # Deuxième profil, avec une bande DIFFÉRENTE : le rappel doit remplacer, pas
     # fusionner.
-    rack_b = os.path.join(tmp, "pb.json")
+    rack_b = os.path.join(douzefx.racks_dir(), "pb.json")
     with open(rack_b, "w") as f:
         json.dump({"version": 1, "bypass": False, "stages": []}, f)
     sup.add_strip({"id": "b", "name": "B", "rack": rack_b,
@@ -1246,6 +1270,7 @@ def main():
         test_slug()
         test_nom_depuis_chemin()
         test_rack_hors_ligne(tmp)
+        test_rack_borne(tmp)
         test_memoire_ecoute_directe(tmp)
         test_config_bandes(tmp)
         test_vue_partagee(tmp)

@@ -264,8 +264,16 @@ The button is `cut`, `alt` or `talk` (where it sits on the panel — `1`, `2`,
 `3` still work), and the function is one of `dim`, `cut`, `mono-sum`, `alt`,
 `invert-l`, `talkback`. A seventh function exists in SSL 360, "360° GUI", which
 opens the SSL 360 window; it is `gui` here, but it has nothing to open on Linux
-and its value is the one part of the menu we never saw on the wire — so the GUI
-does not offer it.
+and its value was never captured from SSL 360 — so the GUI does not offer it.
+Set from the CLI, the card accepts it (seen on firmware 1.41) and reports each
+press; the daemon then runs the command in `DOUZE_GUI_CMD`, if set — for
+example in a drop-in for the user unit:
+
+```ini
+# ~/.config/systemd/user/douze.service.d/gui.conf
+[Service]
+Environment="DOUZE_GUI_CMD=my-mixer-app --toggle"
+```
 
 The assignment is stored with the rest of your mixer state, and pushed back to
 the card by `sslctl sync` and on daemon startup: unplugging the SSL 12 does not
@@ -284,6 +292,60 @@ Mix 1-2* on, and the card keeps it. Douze re-pushes it (off by default); toggle 
 in the Monitoring panel or with `sslctl bus hp-a follow on|off`.
 
 ---
+
+## HTTP API
+
+The daemon serves the GUI and a small JSON API on `http://127.0.0.1:1212`,
+for scripts and other front ends. It listens on localhost only, and answers
+only the user it runs as. Every request is refused with 403 if:
+
+- the connection belongs to another local user (checked against the kernel's
+  socket table, `/proc/net/tcp`), so other accounts on a shared machine can't
+  drive the card or write files through it;
+- the `Host` header isn't `localhost:1212` / `127.0.0.1:1212` (DNS rebinding);
+- an `Origin` header is present and isn't the GUI's own, so a web page open in
+  your browser can't send it commands.
+
+Scripts (`curl`) and desktop front ends send no `Origin` and work as before.
+FX rack files must be `.json` files in `~/.config/douze-fx/racks/`.
+
+| Endpoint | |
+| --- | --- |
+| `GET /state` | the whole logical state: `channels`, `sends`, `masters`, `monitoring`, `preamp`, `user_buttons`, `bus_modes`, `ui`, … plus `_clock`, `_device` (card present), `_profiles` and `_features` |
+| `GET /events` | Server-Sent Events, one JSON object per `data:` line (see below) |
+| `POST /api` | one command as a JSON object; replies `{"ok": true, "state": {…}}` or `{"ok": false, "error": "…"}` |
+
+Commands (`ch` is `1`–`4`, `a1`–`a8`, `pb12`, `pb34`, `pb56` or `pb78`; levels
+are dB numbers or `"off"`):
+
+| Command | Fields |
+| --- | --- |
+| `fader` | `ch`, `db` — level in the main mix (Monitor) |
+| `pan` | `ch`, `pos` (−100 … 100) |
+| `mute`, `solo` | `ch`, `on` |
+| `route` | `ch`, `bus` (`hpa`, `hpb`, `line34`), `level`, optional `pan` (−100 … 100) — send to an aux bus; the pan is kept per send |
+| `dir` | `ch` (`pb12` … `pb78`), `on` — playback straight to its fixed output |
+| `master` | `bus` (`monitor`, `hp-a`, `hp-b`, `line34`, `line4`), `db` |
+| `bus` | `bus` (`hp-a`, `hp-b`, `line34`, `line4`), `mode` (`follow`, `cut`, `mono`), `on` |
+| `mon` | `name` (`dim`, `cut`, `mono`, `invert-l`, `alt`, `talk`), `on` |
+| `preamp` | `name` (`48v`, `inst`, `hpf`, `phase`), `ch` (0–3), `on` |
+| `loopback` | `source` (`none`, `pb12` … `pb78`, `monitor`, `line34`, `hpa`, `hpb`) |
+| `user` | `button` (`cut`, `alt`, `talk`), `fn` (`dim`, `cut`, `mono-sum`, `alt`, `invert-l`, `talkback`, `gui`) |
+| `altspk` | `on` |
+| `dimlevel`, `alttrim` | `db` |
+| `profile-save`, `profile-load`, `profile-delete` | `name` |
+| `ui` | `key`, `value` — a front end's own setting, stored with the state, nothing sent to the card |
+
+Events: `meters` (`v`: the raw meter words, see PROTOCOL.md), `state` (after
+any command), `bool` (a button or switch changed on the card), `clock`,
+`device` / `disconnected`, `gui` (a USER button set to `gui` was pressed),
+`raw` (an incoming frame the daemon does not decode: `op`, `hex`) and `fx`.
+
+Line 3-4 are two mono outputs on the card: `line34` sets output 3 and `line4`
+output 4 (FOLLOW and level act per output; set both for the pair).
+
+`_features` lists the extensions a front end can rely on beyond the commands
+above: `bus_modes`, `ui`, `gui`, `adat`, `line4`, `send_pan`.
 
 ## Desktop app (optional)
 

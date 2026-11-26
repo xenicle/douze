@@ -34,6 +34,23 @@ import xml.etree.ElementTree as _ET
 CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME",
                           os.path.expanduser("~/.config")), "douze-fx")
 STRIPS_PATH = os.path.join(CONFIG_DIR, "strips.json")
+def racks_dir():
+    return os.path.join(CONFIG_DIR, "racks")
+
+
+def rack_sur(chemin):
+    """Le chemin d'un rack s'il est un .json DANS racks_dir(), sinon "".
+
+    Le chemin vient de la config d'une bande, donc de POST /fx : sans cette
+    borne, une requête pouvait désigner n'importe quel fichier de
+    l'utilisateur et le faire remplacer par du JSON de rack."""
+    if not chemin:
+        return ""
+    p = os.path.realpath(os.path.expanduser(chemin))
+    base = os.path.realpath(racks_dir())
+    if os.path.dirname(p) != base or not p.endswith(".json"):
+        return ""
+    return p
 LOG_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME",
                        os.path.expanduser("~/.cache")), "douze-fx")
 
@@ -1426,9 +1443,9 @@ class Strip:
                 "--out", out_client,
                 "--out-ch", out_ch]
 
-        rack = self.cfg.get("rack")
+        rack = rack_sur(self.cfg.get("rack"))
         if rack:
-            args += ["--rack", os.path.expanduser(rack)]
+            args += ["--rack", rack]
 
         # PAS de bloc par bande : sous PipeWire, une bande qui « demande » un
         # quantum tire TOUT le graphe avec elle — ce n'est donc pas un réglage
@@ -1581,7 +1598,7 @@ class Strip:
     # process) devient une impasse — chaîne vide, aucun moyen d'ajouter.
 
     def _rack_path(self):
-        return os.path.expanduser(self.cfg.get("rack") or "")
+        return rack_sur(self.cfg.get("rack"))
 
     def _rack_read(self):
         try:
@@ -1972,7 +1989,7 @@ class Supervisor:
         racks = {}
         for c in bandes:
             try:
-                with open(os.path.expanduser(c.get("rack") or "")) as f:
+                with open(rack_sur(c.get("rack"))) as f:
                     racks[c["id"]] = json.load(f)
             except (OSError, ValueError):
                 # Une bande sans rack lisible entre quand même dans le profil, en
@@ -2004,7 +2021,7 @@ class Supervisor:
         racks = prof.get("racks") or {}
         for c in bandes:
             rack = racks.get(c["id"])
-            chemin = os.path.expanduser(c.get("rack") or "")
+            chemin = rack_sur(c.get("rack"))
             if rack is None or not chemin:
                 continue
             os.makedirs(os.path.dirname(chemin), exist_ok=True)
@@ -2038,12 +2055,14 @@ class Supervisor:
             sid, i = f"{base}{i}", i + 1
         cfg["id"] = sid
         cfg.setdefault("name", sid)
-        cfg.setdefault("rack", os.path.join(CONFIG_DIR, "racks", f"{sid}.json"))
+        cfg.setdefault("rack", os.path.join(racks_dir(), f"{sid}.json"))
         cfg.setdefault("cut_direct", [])
+        if not rack_sur(cfg["rack"]):
+            raise ValueError("le rack doit être un fichier .json dans " + racks_dir())
 
         # Un rack vide dès la création : la bande démarre en passthrough plutôt
         # que de râler sur un fichier absent.
-        rack = os.path.expanduser(cfg["rack"])
+        rack = rack_sur(cfg["rack"])
         if not os.path.exists(rack):
             os.makedirs(os.path.dirname(rack), exist_ok=True)
             with open(rack, "w") as f:
@@ -2081,6 +2100,9 @@ class Supervisor:
         changement était accepté, écrit sur disque et affiché — mais l'audio
         continuait de suivre l'ancienne route jusqu'au prochain arrêt manuel :
         un réglage qui « ne marche pas » sans dire pourquoi."""
+        if "rack" in patch and not rack_sur(patch["rack"]):
+            return {"updated": False, "restarted": False,
+                    "msg": "le rack doit être un fichier .json dans " + racks_dir()}
         all_cfg = load_strips()
         found = recable = False
         for c in all_cfg.get("strips", []):

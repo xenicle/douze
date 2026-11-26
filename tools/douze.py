@@ -14,6 +14,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -57,6 +58,17 @@ MANIFEST = {
             "%3C/svg%3E"),
         "sizes": "96x96", "type": "image/svg+xml", "purpose": "any"}],
 }
+
+# Fonctions de l'API que ce démon offre en plus du socle, annoncées dans l'état
+# (`_features`) : une interface tierce masque ce que le démon ne sait pas faire
+# plutôt que d'envoyer des commandes qui échoueraient.
+FEATURES = ["bus_modes", "ui", "gui", "adat", "line4", "send_pan"]
+
+# Commande lancée quand un bouton de façade réglé sur « 360° GUI » est pressé
+# (opcode IN 0x22). Lue dans l'environnement — l'unité systemd la fixe — et
+# jamais depuis l'API : POST /api est ouvert à tout process local, il ne doit
+# pas pouvoir choisir ce que le démon exécute.
+GUI_CMD = shlex.split(os.environ.get("DOUZE_GUI_CMD", ""))
 
 # instances des booléens DIR par paire playback (bus de destination fixe)
 DIR_DEST = {"pb12": "mix", "pb34": "line34", "pb56": "hpa", "pb78": "hpb"}
@@ -387,7 +399,22 @@ class Device(threading.Thread):
                 del b[0]
 
     def dispatch(self, op, payload):
+        if op == 0x22 and len(payload) >= 3:
+            # bouton USER réglé sur « 360° GUI » : `GG 00 VV`, GG = groupe LED
+            # du bouton (0c CUT, 0d ALT, 0e TALK), VV = 1 appui / 0 relâché
+            self.bus.push({"ev": "gui", "button": payload[0], "on": bool(payload[2])})
+            if payload[2] and GUI_CMD:
+                try:
+                    subprocess.Popen(GUI_CMD, start_new_session=True,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except OSError as e:
+                    print(f"bouton GUI : {e}", flush=True)
+            return
         if op != 0x6C or len(payload) < 6:
+            # trames non décodées relayées telles quelles (événement raw) :
+            # c'est ainsi que 0x22 a été trouvé, depuis une GUI, sans capture
+            if op not in (0x01, 0x02, 0x05, 0x06, 0x4B, 0x4E):
+                self.bus.push({"ev": "raw", "op": op, "hex": payload.hex()})
             return
         sub = payload[0]
         if sub == 0x09 and len(payload) >= 8:
@@ -412,6 +439,16 @@ class Device(threading.Thread):
             inst = int.from_bytes(payload[4:6], "little")
             val = bool(payload[6])
             name = next((k for k, v in BOOL_CTRL.items() if v == ctrl), None)
+            # n'enregistrer que ce qui a un sens : monitoring sur l'instance 0,
+            # préamplis sur les canaux 0–3. Une réponse à un get (sub 03) sur
+            # un autre registre réutilise les mêmes numéros de contrôle (DIM =
+            # 6, ALT = 8…) avec d'autres instances : prise pour un bouton, elle
+            # polluait l'état — et push_full_state la renvoyait au device.
+            monitoring = name in ("dim", "cut", "mono", "invert-l", "alt", "talk")
+            if name and ((monitoring and inst != 0) or (not monitoring and inst > 3)):
+                name = None
+            if not name:
+                self.bus.push({"ev": "raw", "op": op, "hex": payload.hex()})
             if name:
               with STATE_LOCK:
                 st = load_state()
@@ -428,6 +465,8 @@ class Device(threading.Thread):
                     st.setdefault("preamp", {}).setdefault(name, {})[str(inst)] = val
                 save_state(st)
                 self.bus.push({"ev": "bool", "name": name, "inst": inst, "on": val})
+        else:
+            self.bus.push({"ev": "raw", "op": op, "hex": payload.hex()})
 
 
 def push_full_state(dev):
@@ -454,6 +493,13 @@ def push_full_state(dev):
     if st.get("alt_spk"):
         out += altspk_msgs(True)
     out += follow_msgs(st)      # off compris : un Mac peut l'avoir laissé allumé
+    # CUT / MONO des masters aux : le device les oublie à l'extinction comme le
+    # reste. FOLLOW n'est PAS rejoué ici : sa source unique est st["follow"]
+    # (follow_msgs ci-dessus), sinon deux mémoires pourraient se contredire.
+    for bus, modes in st.get("bus_modes", {}).items():
+        for mode, on in modes.items():
+            if mode != "follow":
+                out += msg_bool(sslctl.BUS_MODE_CTRL[mode], MASTER_INST[bus], on, sub=0x07)
     lv = st.get("monitoring_levels", {})
     if "dimlevel" in lv:
         out += msg_gain(3, 0, db_to_val(lv["dimlevel"]))
@@ -747,6 +793,7 @@ def apply_cmd(c):
     st["_device"] = DEV.present
     st["_modele"] = MODELE_INFO
     st["_profiles"] = list_profiles()
+    st["_features"] = FEATURES
     BUS.push({"ev": "state", "state": st})   # sync live de toutes les pages
     return st
 
@@ -763,10 +810,16 @@ def _apply_cmd(c):
         save_state(st)
         DEV.write(b"".join(msg_gain(1, i, v) for i, v in compile_mix(st)))
     elif kind == "route":
-        st.setdefault("sends", {}).setdefault(c["ch"], {})[c["bus"]] = c["level"]
+        # `pan` (−100…100) facultatif : gardé par send dans send_pans, et
+        # réappliqué quand seul le niveau change
+        ch, bus = c["ch"], c["bus"]
+        level = c["level"] if "level" in c else st.get("sends", {}).get(ch, {}).get(bus, "off")
+        st.setdefault("sends", {}).setdefault(ch, {})[bus] = level
+        if "pan" in c:
+            st.setdefault("send_pans", {}).setdefault(ch, {})[bus] = float(c["pan"])
         save_state(st)
-        DEV.write(b"".join(msg_gain(1, i, v)
-                           for i, v in send_cells(c["ch"], c["bus"], c["level"])))
+        DEV.write(b"".join(msg_gain(1, i, v) for i, v in
+                           send_cells(ch, bus, level, sslctl.send_pan(st, ch, bus))))
     elif kind == "dir":
         bus, ch = DIR_DEST[c["ch"]], c["ch"]
         st.setdefault("dir", {})[ch] = c["on"]
@@ -852,6 +905,23 @@ def _apply_cmd(c):
             st.pop("profile", None)
             st.pop("profile_dirty", None)
             save_state(st)
+    elif kind == "bus":
+        # FOLLOW MIX 1-2 / CUT / MONO d'un master aux (capture 20 : sub 07, sans
+        # ACK — d'où la mémoire dans l'état, seule source de vérité pour la GUI)
+        bus, mode, on = c["bus"], c["mode"], bool(c["on"])
+        if mode == "follow":
+            st.setdefault("follow", {})[bus] = on
+            save_state(st)
+            DEV.write(follow_msgs(st))
+        else:
+            DEV.write(msg_bool(sslctl.BUS_MODE_CTRL[mode], MASTER_INST[bus], on, sub=0x07))
+            st.setdefault("bus_modes", {}).setdefault(bus, {})[mode] = on
+            save_state(st)
+    elif kind == "ui":
+        # réglages propres à une interface (liens stéréo, colonnes affichées…),
+        # gardés avec l'état pour suivre les profils ; aucune trame envoyée
+        st.setdefault("ui", {})[c["key"]] = c.get("value")
+        save_state(st)
     elif kind == "raw":
         # debug : trame brute (séquences observées uniquement !)
         DEV.write(bytes.fromhex(c["hex"]))
@@ -872,11 +942,64 @@ def _apply_cmd(c):
     return final
 
 
+# --- qui a le droit de parler au démon --------------------------------------
+#
+# L'API pilote la carte ET écrit des fichiers (racks, profils) avec les droits
+# de l'utilisateur du démon. Écouter sur 127.0.0.1 ne suffit pas :
+#   - sur une machine partagée, tout autre compte local peut s'y connecter ;
+#   - n'importe quel site web peut faire POSTer le navigateur de l'utilisateur
+#     vers 127.0.0.1 (requête « simple », sans pré-vol CORS), et le DNS
+#     rebinding fait passer un nom de domaine pour localhost.
+# D'où trois contrôles à chaque requête : la connexion appartient à notre uid
+# (table des sockets du noyau), l'en-tête Host est bien local, et une requête
+# venue d'une page porte l'Origin de la GUI elle-même.
+LOCAL_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+LOCAL_ORIGINS = {f"http://{h}" for h in LOCAL_HOSTS}
+
+
+def uid_du_client(ip, port):
+    """uid propriétaire de la socket CLIENTE (ip:port → 127.0.0.1:PORT), lu
+    dans /proc/net/tcp — l'équivalent de SO_PEERCRED pour une connexion TCP
+    locale. None si introuvable."""
+    try:
+        a, b, c, d = (int(x) for x in ip.split("."))
+    except ValueError:
+        return None
+    local = f"{d:02X}{c:02X}{b:02X}{a:02X}:{port:04X}"
+    try:
+        with open("/proc/net/tcp") as f:
+            next(f)
+            for ligne in f:
+                champs = ligne.split()
+                if (len(champs) > 7 and champs[1] == local
+                        and champs[2].endswith(f":{PORT:04X}")):
+                    return int(champs[7])
+    except OSError:
+        pass
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def autorise(self):
+        """Refuse (403) une requête d'un autre utilisateur ou d'une autre page."""
+        ip, port = self.client_address[:2]
+        if uid_du_client(ip, port) != os.getuid():
+            motif = "connexion d'un autre utilisateur"
+        elif self.headers.get("Host", "") not in LOCAL_HOSTS:
+            motif = "en-tête Host non local"
+        elif self.headers.get("Origin") not in (None, *LOCAL_ORIGINS):
+            motif = "requête venue d'une autre page web"
+        else:
+            return True
+        self.send_error(403, motif)
+        return False
+
     def do_GET(self):
+        if not self.autorise():
+            return
         if self.path == "/":
             with open(HTML, "rb") as f:
                 body = f.read()
@@ -891,6 +1014,7 @@ class Handler(BaseHTTPRequestHandler):
             st["_device"] = DEV.present
             st["_modele"] = MODELE_INFO
             st["_profiles"] = list_profiles()
+            st["_features"] = FEATURES
             self.send_json(st)
         elif self.path == "/manifest.json":
             self.send_json(MANIFEST)
@@ -922,6 +1046,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
+        if not self.autorise():
+            return
         if self.path not in ("/api", "/fx"):
             return self.send_error(404)
         n = int(self.headers.get("Content-Length", 0))

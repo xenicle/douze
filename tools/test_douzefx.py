@@ -1264,6 +1264,70 @@ def test_modeles():
     verifie("SSL_18" in out, "SSL 18 : le motif du nœud ALSA suit le modèle")
 
 
+def test_autorise():
+    """API du démon : seule la session de l'utilisateur, depuis la GUI, est servie."""
+    import subprocess
+    print("[API locale : uid, Host, Origin]")
+    ici = os.path.dirname(os.path.abspath(__file__))
+    code = (
+        "import http.client, os, threading, douze\n"
+        "from http.server import ThreadingHTTPServer\n"
+        "class H(douze.Handler):\n"
+        "    def do_GET(self):\n"
+        "        if self.autorise():\n"
+        "            self.send_response(200); self.send_header('Content-Length', '2')\n"
+        "            self.end_headers(); self.wfile.write(b'ok')\n"
+        "srv = ThreadingHTTPServer(('127.0.0.1', 0), H)\n"
+        "port = srv.server_address[1]\n"
+        "douze.PORT = port\n"
+        "douze.LOCAL_HOSTS = {f'localhost:{port}', f'127.0.0.1:{port}'}\n"
+        "douze.LOCAL_ORIGINS = {f'http://{h}' for h in douze.LOCAL_HOSTS}\n"
+        "threading.Thread(target=srv.serve_forever, daemon=True).start()\n"
+        "def get(host=None, origin=None):\n"
+        "    c = http.client.HTTPConnection('127.0.0.1', port, timeout=5)\n"
+        "    c.putrequest('GET', '/', skip_host=True)\n"
+        "    c.putheader('Host', host or f'127.0.0.1:{port}')\n"
+        "    if origin: c.putheader('Origin', origin)\n"
+        "    c.endheaders(); r = c.getresponse(); r.read(); c.close()\n"
+        "    return r.status\n"
+        "print('normal', get())\n"
+        "print('localhost', get(host=f'localhost:{port}'))\n"
+        "print('origine_gui', get(origin=f'http://127.0.0.1:{port}'))\n"
+        "print('host_etranger', get(host='evil.example'))\n"
+        "print('host_sans_port', get(host='127.0.0.1'))\n"
+        "print('rebinding', get(host=f'evil.example:{port}'))\n"
+        "print('origine_etrangere', get(origin='http://evil.example'))\n"
+        "print('origine_autre_port', get(origin='http://127.0.0.1:9'))\n"
+        "print('origine_nulle', get(origin='null'))\n"
+        "print('socket_inconnue', douze.uid_du_client('127.0.0.1', 1) is None)\n"
+        "print('ip_invalide', douze.uid_du_client('pas-une-ip', 1) is None)\n"
+        "real = douze.uid_du_client\n"
+        "douze.uid_du_client = lambda ip, p: os.getuid() + 1\n"
+        "print('autre_uid', get())\n"
+        "douze.uid_du_client = lambda ip, p: None\n"
+        "print('uid_inconnu', get())\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                       cwd=ici, timeout=60)
+    res = dict(l.split(None, 1) for l in r.stdout.splitlines() if " " in l)
+    verifie(r.returncode == 0 and res.get("normal") == "200",
+            "requête locale de la GUI acceptée"
+            + ("" if res.get("normal") == "200" else f" ({(r.stdout + r.stderr).strip()[-200:]})"))
+    verifie(res.get("localhost") == "200", "Host localhost:PORT accepté")
+    verifie(res.get("origine_gui") == "200", "Origin de la GUI elle-même acceptée")
+    verifie(res.get("host_etranger") == "403" and res.get("rebinding") == "403",
+            "Host non local refusé (DNS rebinding)")
+    verifie(res.get("host_sans_port") == "403", "Host sans le bon port refusé")
+    verifie(res.get("origine_etrangere") == "403" and
+            res.get("origine_autre_port") == "403" and
+            res.get("origine_nulle") == "403",
+            "Origin d'une autre page refusée (POST « simple » d'un site web)")
+    verifie(res.get("autre_uid") == "403", "connexion d'un autre utilisateur refusée")
+    verifie(res.get("uid_inconnu") == "403", "uid introuvable : refus par défaut")
+    verifie(res.get("socket_inconnue") == "True" and res.get("ip_invalide") == "True",
+            "uid_du_client : socket inconnue ou IP invalide -> None")
+
+
 def main():
     import douzefx
 
@@ -1302,6 +1366,7 @@ def main():
         test_scan_amorcage(tmp)
         test_enumeration_plugins()
         test_modeles()
+        test_autorise()
 
     print(f"\n=== {TOTAL - len(ECHECS)}/{TOTAL} vérification(s) OK", end=" ")
     print("— tout passe ===" if not ECHECS else f"— ÉCHEC ===\n{chr(10).join(ECHECS)}")

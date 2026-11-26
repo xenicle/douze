@@ -2415,7 +2415,75 @@ class GardeCaptureMorte:
         self.notifier(f"{appli} ne t'entend plus",
                       f"{appli} a cessé de lire le micro. Relance {appli} "
                       f"(Douze peut rester tel quel).")
+        chemin = self.instantane(appli, flux)
+        if chemin:
+            print(f"[fx] instantané de la panne : {chemin}", flush=True)
         return True
+
+    INSTANTANES = 20          # garde-fou : on ne remplit pas le disque
+
+    def instantane(self, appli, flux):
+        """Photographie ce qui reste de l'appli au moment de la panne.
+
+        Lecture seule : ni relance, ni rebranchement. But : savoir, au prochain
+        épisode, si le flux de capture est mort côté PipeWire (lien absent,
+        nœud suspendu…) ou si c'est l'appli qui ne lit plus. Rien de tout cela
+        n'est visible une fois l'appli relancée. Renvoie le chemin écrit, ou None.
+        """
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            anciens = sorted(f for f in os.listdir(LOG_DIR)
+                             if f.startswith("panne-capture-") and f.endswith(".txt"))
+            for f in anciens[:-self.INSTANTANES + 1]:
+                os.remove(os.path.join(LOG_DIR, f))
+            base = os.path.join(LOG_DIR, time.strftime("panne-capture-%Y%m%d-%H%M%S"))
+            nom, n = base + ".txt", 1
+            while os.path.exists(nom):
+                nom, n = f"{base}-{n}.txt", n + 1
+
+            def cmd(*argv, timeout=10):
+                try:
+                    r = subprocess.run(list(argv), capture_output=True, text=True,
+                                       timeout=timeout)
+                    return (r.stdout + r.stderr).rstrip() or "(vide)"
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    return f"(échec : {e})"
+
+            objs = _pw_objects()
+            props = lambda o: (o.get("info") or {}).get("props") or {}
+            appli_ids = {str(o.get("id")) for o in objs
+                         if str(o.get("type", "")).endswith("Node")
+                         and props(o).get("application.name") == appli}
+            liens = [o for o in objs if str(o.get("type", "")).endswith("Link")
+                     and (str((o.get("info") or {}).get("output-node-id")) in appli_ids
+                          or str((o.get("info") or {}).get("input-node-id")) in appli_ids)]
+            noeuds = [o for o in objs if str(o.get("id")) in appli_ids]
+
+            with open(nom + ".tmp", "w", encoding="utf-8") as f:
+                f.write(f"Panne de capture : {appli} (flux pipewire-pulse {flux})\n")
+                f.write(f"Horodatage : {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                f.write("== Journal pipewire-pulse (dernières lignes) ==\n")
+                f.write(cmd(self.JOURNALCTL, "--user", "-u", "pipewire-pulse",
+                            "-n", "40", "--no-pager", "-o", "short-precise") + "\n\n")
+                f.write("== Nœuds de l'appli (pw-dump) ==\n")
+                f.write(json.dumps(noeuds, indent=1, ensure_ascii=False) + "\n\n")
+                f.write("== Liens de l'appli (pw-dump) ==\n")
+                f.write(json.dumps(liens, indent=1, ensure_ascii=False) + "\n\n")
+                f.write("== pw-link -l ==\n")
+                f.write(cmd(PW_LINK, "-l") + "\n\n")
+                f.write("== pw-cli ls Node (état) ==\n")
+                f.write(cmd(PW_CLI, "ls", "Node") + "\n\n")
+                f.write("== pactl list source-outputs ==\n")
+                f.write(cmd("pactl", "list", "source-outputs") + "\n\n")
+                f.write("== pactl list sink-inputs ==\n")
+                f.write(cmd("pactl", "list", "sink-inputs") + "\n\n")
+                f.write("== Processus de l'appli ==\n")
+                f.write(cmd("ps", "-eo", "pid,lstart,etime,stat,comm") + "\n")
+            os.replace(nom + ".tmp", nom)
+            return nom
+        except OSError as e:
+            print(f"[fx] instantané impossible : {e}", flush=True)
+            return None
 
     def _suivre(self):
         while True:

@@ -834,10 +834,11 @@ def test_garde_resync(tmp):
     verifie(g4.repos_jusqua > t["v"], "même un soin raté pose le répit")
 
 
-def test_garde_capture_morte():
+def test_garde_capture_morte(tmp):
     print("[test] garde capture : une appli qui ne lit plus le micro est signalée")
     import douzefx
 
+    douzefx.LOG_DIR = tmp
     t = {"v": 0.0}
     alertes = []
     g = douzefx.GardeCaptureMorte(horloge=lambda: t["v"],
@@ -864,6 +865,18 @@ def test_garde_capture_morte():
     verifie(not a(1, "mod.protocol-pulse: 0x2: [vesktop] underrun") and
             not a(1, "spa.alsa: hw:0,0p: follower resync"),
             "seul l'overrun (flux d'enregistrement) compte")
+    instantanes = sorted(f for f in os.listdir(tmp) if f.startswith("panne-capture-"))
+    verifie(len(instantanes) == 2 and instantanes[0] != instantanes[1],
+            "chaque alerte écrit un instantané (une fois par flux)")
+    texte = open(os.path.join(tmp, instantanes[0]), encoding="utf-8").read()
+    verifie("== pactl list source-outputs ==" in texte and "vesktop" in texte,
+            "l'instantané nomme l'appli et contient les sections attendues")
+    for i in range(douzefx.GardeCaptureMorte.INSTANTANES + 3):
+        douzefx.GardeCaptureMorte(horloge=lambda: 0.0,
+                                  notifier=lambda *a: None).instantane("vesktop", str(i))
+    restants = [f for f in os.listdir(tmp) if f.startswith("panne-capture-")]
+    verifie(len(restants) == douzefx.GardeCaptureMorte.INSTANTANES,
+            "rotation : pas plus d'instantanés que le plafond")
 
 
 def test_guerir_resync(tmp):
@@ -1282,7 +1295,7 @@ def main():
         test_profils(tmp)
         test_horloge_relance(tmp)
         test_garde_resync(tmp)
-        test_garde_capture_morte()
+        test_garde_capture_morte(tmp)
         test_guerir_resync(tmp)
         test_readoption()
         test_horloge_carte(tmp)

@@ -31,7 +31,7 @@ import sslctl
 import sslmodel
 from sslctl import (BOOL_CTRL, LOOPBACK, MASTER_INST, BUS_LAYERS,
                     USER_BUTTONS, USER_FN, user_msgs, led_group_for, altspk_msgs,
-                    follow_msgs,
+                    follow_msgs, talkback_msgs, TALKBACK_INST,
                     CHANNELS, STRIDE, compile_mix, compile_sends, send_cells,
                     db_to_val, default_channel, frame, load_state, msg_bool,
                     msg_enum, msg_gain, msg_get, msg_led, save_state)
@@ -62,7 +62,7 @@ MANIFEST = {
 # Fonctions de l'API que ce démon offre en plus du socle, annoncées dans l'état
 # (`_features`) : une interface tierce masque ce que le démon ne sait pas faire
 # plutôt que d'envoyer des commandes qui échoueraient.
-FEATURES = ["bus_modes", "ui", "gui", "adat", "line4", "send_pan"]
+FEATURES = ["bus_modes", "ui", "gui", "adat", "line4", "send_pan", "talkback"]
 
 # Commande lancée quand un bouton de façade réglé sur « 360° GUI » est pressé
 # (opcode IN 0x22). Lue dans l'environnement — l'unité systemd la fixe — et
@@ -492,6 +492,7 @@ def push_full_state(dev):
     out += user_msgs(st)
     if st.get("alt_spk"):
         out += altspk_msgs(True)
+    out += talkback_msgs(st)
     out += follow_msgs(st)      # off compris : un Mac peut l'avoir laissé allumé
     # CUT / MONO des masters aux : le device les oublie à l'extinction comme le
     # reste. FOLLOW n'est PAS rejoué ici : sa source unique est st["follow"]
@@ -874,6 +875,21 @@ def _apply_cmd(c):
         st.setdefault("follow", {})[c["bus"]] = c["on"]
         save_state(st)
         DEV.write(follow_msgs(st))
+    elif kind == "talkback":
+        # gain du talkback vers un côté de sortie (sub 06, contrôle 8, mesuré le
+        # 28/11/2026) : "off" = pas de talkback sur cette sortie. Plafond +12 dB,
+        # comme les autres gains u32 de la carte ; le firmware lui-même sortait
+        # HP A droite à +19 dB sans broncher, mais rien n'est mesuré au-delà de 0.
+        out, db = c["out"], c["db"]
+        if out not in TALKBACK_INST:
+            raise ValueError(f"sortie talkback inconnue : {out}")
+        if not (isinstance(db, str) and db.lower() in ("off", "-inf")):
+            db = float(db)
+            if not -60 <= db <= 12:
+                raise ValueError(f"niveau talkback hors plage (−60 … +12 dB) : {db}")
+        DEV.write(msg_gain(8, TALKBACK_INST[out], db_to_val(db)))
+        st.setdefault("talkback", {})[out] = "off" if isinstance(db, str) else db
+        save_state(st)
     elif kind == "dimlevel":
         DEV.write(msg_gain(3, 0, db_to_val(c["db"])))
         st.setdefault("monitoring_levels", {})["dimlevel"] = c["db"]

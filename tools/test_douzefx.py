@@ -1328,6 +1328,30 @@ def test_autorise():
             "uid_du_client : socket inconnue ou IP invalide -> None")
 
 
+def test_talkback():
+    """Gain talkback par sortie : sub 06, contrôle 8, instances 2 à 7 (mesuré sur la carte)."""
+    import sslctl
+    print("[talkback par sortie]")
+    verifie(sslctl.TALKBACK_INST == {"line34": 2, "line4": 3, "hp-a-l": 4, "hp-a-r": 5,
+                                      "hp-b-l": 6, "hp-b-r": 7},
+            "six côtés, instances 2 à 7")
+    # HP A droite part à 0 dB (le firmware la sortait à ≈ +19 dB) : exactement la
+    # trame de la capture 24 (sub 06, contrôle 8, instance 5), valeur 2^25
+    verifie(sslctl.talkback_msgs({}).hex() == "ff6b0a060008000500000000028a",
+            "défaut : HP A droite à 0 dB, rien d'autre")
+    # une valeur choisie remplace le défaut au lieu de s'y ajouter
+    f = sslctl.talkback_msgs({"talkback": {"hp-a-r": -10.0}})
+    verifie(f == sslctl.frame(0x6B, bytes([6, 0, 8, 0, 5, 0]) + sslctl.db_to_val(-10.0).to_bytes(4, "little")),
+            "HP A droite choisie : une seule trame, à la valeur choisie")
+    # « off » = gain 0 (−inf) sur l'instance de la sortie
+    f = sslctl.talkback_msgs({"talkback": {"line34": "off"}})
+    verifie(sslctl.frame(0x6B, bytes([6, 0, 8, 0, 2, 0, 0, 0, 0, 0])) in f
+            and f.count(sslctl.frame(0x6B, bytes([6, 0, 8, 0, 5, 0]) + sslctl.db_to_val(0).to_bytes(4, "little"))) == 1,
+            "off : Line 3 coupée, HP A droite toujours à 0 dB")
+    verifie(sslctl.talkback_msgs({"talkback": {"inconnue": 0}}).hex() == "ff6b0a060008000500000000028a",
+            "sortie inconnue ignorée au rejeu")
+
+
 def main():
     import douzefx
 
@@ -1367,6 +1391,7 @@ def main():
         test_enumeration_plugins()
         test_modeles()
         test_autorise()
+        test_talkback()
 
     print(f"\n=== {TOTAL - len(ECHECS)}/{TOTAL} vérification(s) OK", end=" ")
     print("— tout passe ===" if not ECHECS else f"— ÉCHEC ===\n{chr(10).join(ECHECS)}")

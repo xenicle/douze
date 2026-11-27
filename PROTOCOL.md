@@ -289,6 +289,25 @@ firmware, non identifié ; candidats non vérifiés : les gains anonymes sub 06
 0x03, 0x06, 0x08, 0x09 répond en sub 05 avec ces numéros de contrôle, que
 le démon prenait pour des boutons (corrigé : instances filtrées).
 
+**Gain talkback par sortie = sub 06 contrôle `0x08`, instances 2 à 7** (mesuré le
+28/11/2026, firmware 1.41, loopback réglé sur la sortie, TALK actif, niveaux
+relevés par rapport au micro, capture 4/5). C'est le « gain interne au
+firmware » ci-dessus : u32 linéaire standard (2²⁵ = 0 dB), **multiplicatif** —
+instance 5 écrite à −60 dB, la sortie passe à −80 dB sous le micro ; à −40 dB,
+−60 dB. Avec ce contrôle à 0 dB, HP A droite tombe à −20,0 dB sous le micro,
+exactement comme HP A gauche (avant : −0,7 dB, soit +19,3 dB d'écart). Au repos
+le talkback arrive à −20 dB sous le micro sur HP A gauche et HP B, −23 dB sur
+Line 3-4, rien sur Monitor. Le profil de la capture 24 écrit ce contrôle à
+−inf sur les six instances, ce qui n'est donc pas ce que le firmware applique
+tant qu'on ne l'a pas écrit. **Instances vérifiées le 28/11/2026** (loopback sur la sortie, TALK actif, un
+côté à −20 dB puis l'autre, puis les deux à « off » : seul le canal du côté
+écrit bouge, de exactement −20 dB, et « off » le coupe) : 2 = Line 3 (canal
+gauche du loopback line34), 3 = Line 4 (droit), 4 = HP A gauche, 5 = HP A droite,
+6 = HP B gauche, 7 = HP B droite. `0x1c` (sub 06, instance 0, +3,0 dB) n'est
+pas un gain talkback par sortie : une seule instance, côté Monitor.
+Le micro lui-même sort sur les canaux de capture 5 et 6 (index 4 et 5, mono)
+tant que TALK est actif, et sur aucun autre moment.
+
 L'opcode `0x13` (payload `01 groupe état`) double certains booléens : CUT →
 groupe 0x0c, ALT → groupe 0x0d — vraisemblablement les **LED des boutons
 physiques** (les 36 messages `0x13` de l'init = synchro complète des LED/HW).

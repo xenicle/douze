@@ -328,6 +328,7 @@ are dB numbers or `"off"`):
 | `master` | `bus` (`monitor`, `hp-a`, `hp-b`, `line34`, `line4`), `db` |
 | `bus` | `bus` (`hp-a`, `hp-b`, `line34`, `line4`), `mode` (`follow`, `cut`, `mono`), `on` |
 | `mon` | `name` (`dim`, `cut`, `mono`, `invert-l`, `alt`, `talk`), `on` |
+| `talkback` | `out` (`line34`, `line4`, `hp-a-l`, `hp-a-r`, `hp-b-l`, `hp-b-r`), `db` (−60 … +12, or `"off"`) — talkback level on one output side; replayed on start. Verified on a card for every output side |
 | `preamp` | `name` (`48v`, `inst`, `hpf`, `phase`), `ch` (0–3), `on` |
 | `loopback` | `source` (`none`, `pb12` … `pb78`, `monitor`, `line34`, `hpa`, `hpb`) |
 | `user` | `button` (`cut`, `alt`, `talk`), `fn` (`dim`, `cut`, `mono-sum`, `alt`, `invert-l`, `talkback`, `gui`) |

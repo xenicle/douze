@@ -733,11 +733,31 @@ def cmd_sync(_a):
     if st.get("alt_spk"):
         out += altspk_msgs(True)
     out += follow_msgs(st)
+    out += talkback_msgs(st)
     SSL12().write(out)
     print("état complet renvoyé au device (mix + routes + masters + boutons + follow)")
 
 
 BUS_MODE_CTRL = {"mono": 2, "cut": 4, "follow": 7}   # sub 07 (capture 20)
+
+# Gain du talkback vers chaque côté de sortie : sub 06, contrôle 0x08, instances
+# 2 à 7 (capture 24, tous à −inf dans le profil). Mesuré le 28/11/2026 sur le
+# loopback, firmware 1.41 : instance 5 (HP A droite) est multiplicative — −60 dB
+# écrits = −60 dB mesurés — et 0 dB y donne le même niveau que HP A gauche.
+# Vérifiées de même : 2, 3, 4, 6, 7 (chaque côté seul, puis « off »).
+TALKBACK_INST = {"line34": 2, "line4": 3, "hp-a-l": 4, "hp-a-r": 5,
+                 "hp-b-l": 6, "hp-b-r": 7}
+# HP A droite sort du firmware à ≈ +19,4 dB (PROTOCOL.md « Anomalie HP A droite ») :
+# on rejoue 0 dB, l'unité des autres côtés, tant que l'utilisateur n'a rien choisi.
+TALKBACK_DEFAULT = {"hp-a-r": 0.0}
+
+
+def talkback_msgs(st):
+    """Gains talkback par sortie (sub 06, contrôle 8) → trames, rejoués à chaque
+    restauration : le device les oublie, et HP A droite repart à +19 dB."""
+    levels = {**TALKBACK_DEFAULT, **st.get("talkback", {})}
+    return b"".join(msg_gain(8, TALKBACK_INST[o], db_to_val(db))
+                    for o, db in levels.items() if o in TALKBACK_INST)
 
 
 def cmd_bus(a):

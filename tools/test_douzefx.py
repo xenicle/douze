@@ -1328,6 +1328,41 @@ def test_autorise():
             "uid_du_client : socket inconnue ou IP invalide -> None")
 
 
+def test_migration_follow(tmp):
+    """Un état d'avant la fusion de la PR #1 garde FOLLOW dans bus_modes."""
+    import sslctl
+    print("[migration de FOLLOW : bus_modes -> follow]")
+    vieux = {"bus_modes": {"hp-a": {"follow": True, "cut": False},
+                           "hp-b": {"follow": False}}}
+    sslctl.migrer_follow(vieux)
+    verifie(vieux["follow"] == {"hp-a": True, "hp-b": False},
+            "FOLLOW des casques recopié dans st['follow']")
+    verifie(vieux["bus_modes"] == {"hp-a": {"cut": False}},
+            "plus de FOLLOW dans bus_modes, CUT conservé, bus vide retiré")
+    verifie(sslctl.follow_msgs(vieux) == sslctl.msg_bool(7, sslctl.MASTER_INST["hp-a"], True, sub=0x07)
+            + sslctl.msg_bool(7, sslctl.MASTER_INST["hp-b"], False, sub=0x07),
+            "follow_msgs rejoue HP A à on et HP B à off")
+    deja = {"follow": {"hp-a": False}, "bus_modes": {"hp-a": {"follow": True}}}
+    sslctl.migrer_follow(deja)
+    verifie(deja["follow"] == {"hp-a": False},
+            "un st['follow'] existant l'emporte, jamais écrasé")
+    neuf = {"channels": {}}
+    verifie(sslctl.migrer_follow(neuf) == {"channels": {}}, "état sans bus_modes intact")
+    verifie(sslctl.migrer_follow({"bus_modes": {"hp-a": "x", "hp-b": None}}) ==
+            {"bus_modes": {"hp-a": "x", "hp-b": None}}, "état mal formé ignoré, sans plantage")
+    ancien = sslctl.STATE_PATH
+    sslctl.STATE_PATH = os.path.join(tmp, "migration-state.json")
+    try:
+        with open(sslctl.STATE_PATH, "w") as f:
+            json.dump({"bus_modes": {"hp-a": {"follow": True}}}, f)
+        verifie(sslctl.load_state().get("follow") == {"hp-a": True},
+                "load_state migre au chargement")
+        verifie(json.load(open(sslctl.STATE_PATH))["bus_modes"] == {"hp-a": {"follow": True}},
+                "le fichier n'est réécrit qu'à la prochaine sauvegarde")
+    finally:
+        sslctl.STATE_PATH = ancien
+
+
 def main():
     import douzefx
 
@@ -1367,6 +1402,7 @@ def main():
         test_enumeration_plugins()
         test_modeles()
         test_autorise()
+        test_migration_follow(tmp)
 
     print(f"\n=== {TOTAL - len(ECHECS)}/{TOTAL} vérification(s) OK", end=" ")
     print("— tout passe ===" if not ECHECS else f"— ÉCHEC ===\n{chr(10).join(ECHECS)}")

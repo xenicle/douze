@@ -244,10 +244,29 @@ def default_channel(name):
     return c
 
 
+def migrer_follow(st):
+    """Un état écrit avec FOLLOW dans bus_modes seulement (branche de la PR #1
+    avant sa fusion) le retrouve dans st["follow"], la source unique que lit
+    follow_msgs : sans cela le casque cesse de suivre au premier redémarrage."""
+    modes = st.get("bus_modes")
+    if not isinstance(modes, dict):
+        return st
+    anciens = {bus: m["follow"] for bus, m in modes.items()
+               if isinstance(m, dict) and "follow" in m}
+    if anciens:
+        suivi = st.setdefault("follow", {})
+        for bus, on in anciens.items():
+            suivi.setdefault(bus, bool(on))
+            del modes[bus]["follow"]
+        for bus in [b for b, m in modes.items() if not m]:
+            del modes[bus]
+    return st
+
+
 def load_state():
     try:
         with open(STATE_PATH) as f:
-            return json.load(f)
+            return migrer_follow(json.load(f))
     except (OSError, ValueError):
         return {"channels": {k: default_channel(k) for k in CHANNELS},
                 "masters": {}, "sends": {}}

@@ -478,7 +478,7 @@ def push_full_state(dev):
     for bus, g in st.get("masters", {}).items():
         out += msg_gain(9, MASTER_INST[bus], db_to_val(g))
     for name, on in st.get("monitoring", {}).items():
-        if name in BOOL_CTRL and name != "talk":   # talk = momentané, pas restauré
+        if name in BOOL_CTRL and name != "talk":   # talk : bascule, jamais rejoué (micro ouvert)
             out += msg_bool(BOOL_CTRL[name], 0, on)
             grp = led_group_for(st, name)
             if grp is not None:
